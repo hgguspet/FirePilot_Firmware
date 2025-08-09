@@ -7,7 +7,7 @@ extern "C"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 }
-#include "telemetry/interface_telemetry_provider.hpp"
+#include "telemetry/itelemetry_provider.hpp"
 
 class TelemetryService
 {

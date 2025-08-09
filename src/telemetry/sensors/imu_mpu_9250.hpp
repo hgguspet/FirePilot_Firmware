@@ -1,5 +1,5 @@
 #pragma once
-#include "../interface_telemetry_provider.hpp"
+#include "../itelemetry_provider.hpp"
 #include "../encoders/json_encoder.hpp"
 
 // lib
