@@ -3,10 +3,7 @@
 #include "../encoders/json_encoder.hpp"
 
 // lib
-#include <Arduino.h>
-#include <Adafruit_Sensor_Calibration.h>
-#include <Adafruit_AHRS.h>
-#include <Adafruit_MPU9250.h>
+#include "MPU9250.h"
 
 #define FILTER_UPDATE_RATE_HZ 100
 
@@ -24,16 +21,5 @@ private:
     JsonEncoder &_encoder;
 
     // Sensor
-    Adafruit_Sensor *_accelerometer, *_gyroscope, *_magnetometer;
-    Adafruit_MPU9250 _imu;
-    Adafruit_Mahony _filter;
-
-// select either EEPROM or SPI FLASH storage:
-#ifdef ADAFRUIT_SENSOR_CALIBRATION_USE_EEPROM
-    Adafruit_Sensor_Calibration_EEPROM cal;
-#else
-    Adafruit_Sensor_Calibration_SDFat cal;
-#endif
-
-    int init_sensors(void);
+    MPU9250 _imu;
 };

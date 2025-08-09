@@ -1,3 +1,6 @@
+// ====== Potential Flags ======
+#define PERFORMANCE_MONITORING 1
+
 #include <Arduino.h>
 #include "services/mqtt_service.hpp"
 #include "services/telemetry_service.hpp"
@@ -9,10 +12,16 @@ static IMU_MPU9250 imu(jsonEnc);
 
 void setup()
 {
+  // Serial
   Serial.begin(115200);
   while (!Serial)
     delay(100);
-  delay(1000); // Give time for Serial to stabilize
+
+  // Wire
+  Wire.begin();
+  Wire.setClock(400000); // 400kHz
+
+  delay(1000); // Give time for Serial and wire to stabilize
 
   // MQTT setup
   MqttService::instance().setServer(IPAddress(192, 168, 1, 200), 1883);
@@ -30,6 +39,4 @@ void setup()
 
 void loop()
 {
-  // MqttService::instance().publish("Drone/test/topic", "Hello, world!");
-  // delay(1000);
 }

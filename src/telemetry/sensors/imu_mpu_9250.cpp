@@ -1,89 +1,36 @@
 #include "imu_mpu_9250.hpp"
 
+#ifdef PERFORMANCE_MONITORING
+#include <esp23_fast_timestamp.h>
+#endif
+
 bool IMU_MPU9250::begin()
 {
-    if (!cal.begin())
+    if (!_imu.setup(0x68)) // Wire address
     {
-        Serial.println("[IMU_MPU_9250] Failed to initialize calibration helper");
-    }
-    else if (!cal.loadCalibration())
-    {
-        Serial.println("[IMU_MPU_9250] No calibration loaded / found");
+        Serial.println("[IMU_MPU9250] MPU connection failed");
+        return false;
     }
 
-    // Initialize sensors
-    int retval = init_sensors();
-    if (retval == 1)
-    {
-        Serial.println("[IMU_MPU_9250] Failed to find sensor");
-        while (1)
-            return false;
-    }
-    else if (retval == 2)
-    {
-        Serial.println("[IMU_MPU_9250] Failed to identify sensor");
-        while (1)
-            return false;
-    }
-    else if (retval == 3)
-    {
-        Serial.println("[IMU_MPU_9250] Failed to identify AK8963");
-        while (1)
-            return false;
-    }
-    else if (retval != 0)
-    {
-        Serial.printf("[IMU_MPU_9250] Unknown error %d\n", retval);
-        while (1)
-            return false;
-    }
-
-    _accelerometer = _imu.getAccelerometerSensor();
-    _gyroscope = _imu.getGyroSensor();
-    _magnetometer = _imu.getMagnetometerSensor();
-
-    // default sensor setup should be ok ?
-    _filter.begin(FILTER_UPDATE_RATE_HZ);
-
-    Wire.setClock(400000); // 400kHz
     return true;
 }
 
 bool IMU_MPU9250::sample(TelemetrySample &out)
 {
-    float ax, ay, az, gx, gy, gz;
+#ifdef PERFORMANCE_MONITORING
+    fasttime::Timestamp start = fasttime::Timestamp::now();
+#endif
 
-    sensors_event_t accel, gyro, mag;
-    _accelerometer->getEvent(&accel);
-    _gyroscope->getEvent(&gyro);
-    _magnetometer->getEvent(&mag);
-
-    cal.calibrate(accel);
-    cal.calibrate(gyro);
-    cal.calibrate(mag);
-
-    // Gyro needs conversion from  Rad/s to Deg/s
-    // The rest are not unit important
-    gx = gyro.gyro.x * SENSORS_RADS_TO_DPS;
-    gy = gyro.gyro.y * SENSORS_RADS_TO_DPS;
-    gz = gyro.gyro.z * SENSORS_RADS_TO_DPS;
-
-    // Update sensor fusion filter
-    _filter.update(gx, gy, gz,
-                   accel.acceleration.x, accel.acceleration.y, accel.acceleration.z,
-                   mag.magnetic.x, mag.magnetic.y, mag.magnetic.z);
-
-    float qw, qx, qy, qz;
-    _filter.getQuaternion(&qw, &qx, &qy, &qz);
+    if (!_imu.update())
+    {
+        Serial.println("[IMU_MPU9250] IMU update failed");
+        return false;
+    }
 
     _encoder.begin();
-    _encoder.add("roll", _filter.getRoll());
-    _encoder.add("pitch", _filter.getPitch());
-    _encoder.add("yaw", _filter.getYaw());
-    _encoder.add("qw", qw);
-    _encoder.add("qx", qx);
-    _encoder.add("qy", qy);
-    _encoder.add("qz", qz);
+    _encoder.add("roll", _imu.getRoll());
+    _encoder.add("pitch", _imu.getPitch());
+    _encoder.add("yaw", _imu.getYaw());
 
     const char *payload;
     size_t len;
@@ -97,18 +44,10 @@ bool IMU_MPU9250::sample(TelemetrySample &out)
     out.payload = payload;
     out.payload_length = len;
     out.is_binary = false; // JSON format
+
+#ifdef PERFORMANCE_MONITORING
+    Serial.printf("[IMU_MPU_9250] Sampled in %llu us\n", fasttime::elapsed_us(start));
+#endif
+
     return true;
-}
-
-int IMU_MPU9250::init_sensors(void)
-{
-    int retval = _imu.begin();
-    if (retval == 0)
-    {
-        _accelerometer = _imu.getAccelerometerSensor();
-        _gyroscope = _imu.getGyroSensor();
-        _magnetometer = _imu.getMagnetometerSensor();
-    }
-
-    return retval;
 }
