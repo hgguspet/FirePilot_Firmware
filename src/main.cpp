@@ -5,11 +5,11 @@
 #include "services/mqtt_service.hpp"
 #include "services/telemetry_service.hpp"
 #include "telemetry/sensors/imu_mpu_9250.hpp"
-#include "telemetry/encoders/json_encoder.hpp"
+#include "drivers/esc/dshot600.hpp"
 
-static JsonEncoder jsonEnc(256);
-static IMU_MPU9250 imu(jsonEnc);
+static DShot600Driver esc1;
 
+static IMU_MPU9250 imu; // Global IMU instance
 const char *deviceId = "Drone";
 
 void setup()
@@ -42,8 +42,13 @@ void setup()
   auto &telem = TelemetryService::instance();
   telem.addProvider(&imu);
   telem.begin(deviceId, 100); // telemetry @ 100Hz
+
+  // ESC setup
+  esc1.begin(4, 1000);
 }
 
 void loop()
 {
+  esc1.writeNormalized(0.5f); // Example: set ESC to 50% throttle
+  delayMicroseconds(500);     // ~2Khz
 }

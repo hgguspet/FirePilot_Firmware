@@ -1,9 +1,5 @@
 #include "imu_mpu_9250.hpp"
 
-#ifdef PERFORMANCE_MONITORING
-#include <esp23_fast_timestamp.h>
-#endif
-
 bool IMU_MPU9250::begin()
 {
     if (!_imu.setup(0x68)) // Wire address
@@ -15,39 +11,43 @@ bool IMU_MPU9250::begin()
     return true;
 }
 
-bool IMU_MPU9250::sample(TelemetrySample &out)
+TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
 {
-#ifdef PERFORMANCE_MONITORING
-    fasttime::Timestamp start = fasttime::Timestamp::now();
-#endif
+    _last_sample_time = fasttime::Timestamp::now();
 
     if (!_imu.update())
     {
         Serial.println("[IMU_MPU9250] IMU update failed");
-        return false;
+        return TelemetryStatus::ERROR;
     }
 
-    _encoder.begin();
-    _encoder.add("roll", _imu.getRoll());
-    _encoder.add("pitch", _imu.getPitch());
-    _encoder.add("yaw", _imu.getYaw());
+    _jw.beginObject();
+    _jw.key("roll");
+    _jw.value(_imu.getRoll());
+    _jw.key("pitch");
+    _jw.value(_imu.getPitch());
+    _jw.key("yaw");
+    _jw.value(_imu.getYaw());
 
-    const char *payload;
+    const uint8_t *payload;
     size_t len;
-    if (!_encoder.finalize(payload, len))
-    {
-        Serial.println("[IMU_MPU_9250] Failed to encode JSON");
-        return false;
-    }
+    if (!_jw.finalize(payload, len))
+        return TelemetryStatus::ERROR;
 
-    out.topic_suffix = "imu";
+    const char *topic = "imu";
+
+    out.topic_suffix = topic;
     out.payload = payload;
     out.payload_length = len;
-    out.is_binary = false; // JSON format
+    out.meta.timestamp = _last_sample_time;
+    out.meta.content_type = TelemetryContentType::JSON; // JSON format
+    out.meta.qos = 0;                                   // Default QoS
+    out.meta.retain = false;                            // Not retained
+    out.meta.full_topic = false;                        // Not full topic
 
 #ifdef PERFORMANCE_MONITORING
-    Serial.printf("[IMU_MPU_9250] Sampled in %llu us\n", fasttime::elapsed_us(start));
+    Serial.printf("[IMU_MPU_9250] Sampled in %llu us\n", fasttime::elapsed_us(_last_sample_time));
 #endif
 
-    return true;
+    return TelemetryStatus::OK;
 }

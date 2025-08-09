@@ -65,20 +65,29 @@ void TelemetryService::run()
             if (_tick >= slot.nextTick)
             {
                 TelemetrySample sample;
-                bool ok = slot.provider->sample(sample);
+                TelemetryStatus status = slot.provider->sample(sample);
                 slot.nextTick += slot.periodTicks; // Schedule next sample
 
-                if (ok && sample.payload && sample.payload_length)
+                if (status == TelemetryStatus::OK && sample.payload && sample.payload_length)
                 {
-                    // Compose topic
-                    String topic = _droneId + "/";
-                    topic += "telemetry/";
-                    topic += sample.topic_suffix ? sample.topic_suffix : slot.provider->name();
+                    if (sample.meta.full_topic)
+                    {
+                        // Publish to full topic
+                        MqttService::instance().publish(sample.topic_suffix, reinterpret_cast<const char *>(sample.payload), sample.payload_length,
+                                                        0 /*  QoS */, false /* retain */);
+                    }
+                    else
+                    {
+                        // Compose topic
+                        String topic = _droneId + "/";
+                        topic += "telemetry/";
+                        topic += sample.topic_suffix ? sample.topic_suffix : slot.provider->name();
 
-                    // Publish (ignore if not connected)
-                    MqttService::instance().publish(topic.c_str(),
-                                                    sample.payload, sample.payload_length,
-                                                    0 /*  QoS */, false /* retain */);
+                        // Publish (ignore if not connected)
+                        MqttService::instance().publish(topic.c_str(),
+                                                        reinterpret_cast<const char *>(sample.payload), sample.payload_length,
+                                                        0 /*  QoS */, false /* retain */);
+                    }
                 }
             }
         }
