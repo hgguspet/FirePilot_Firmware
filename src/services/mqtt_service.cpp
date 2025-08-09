@@ -116,18 +116,48 @@ bool MqttService::publish(const char *topic, const char *payload, size_t len,
 
 bool MqttService::subscribe(const char *topic, uint8_t qos)
 {
+    // Keep a persistent copy for future resubscribe
+    _subs.push_back(Sub{topic, qos});
     if (!mqttClient_.connected())
-        return false;
+    {
+        Serial.printf("[MQTT] Queued sub '%s' not yet connected\n", topic);
+        return true; // Queued
+    }
     uint16_t id = mqttClient_.subscribe(topic, qos);
     return id != 0;
 }
 
+void MqttService::resubscribeAll()
+{
+    for (const auto &sub : _subs)
+    {
+        uint16_t id = mqttClient_.subscribe(sub.topic, sub.qos);
+        Serial.printf("[MQTT] (Re)subscribe '%s' qos=%u -> id=%u\n",
+                      sub.topic, sub.qos, id);
+    }
+}
+
 bool MqttService::unsubscribe(const char *topic)
 {
-    if (!mqttClient_.connected())
-        return false;
-    uint16_t id = mqttClient_.unsubscribe(topic);
-    return id != 0;
+    // Check persistent subscriptions
+    auto it = std::find_if(_subs.begin(), _subs.end(),
+                           [topic](const Sub &sub)
+                           { return strcmp(sub.topic, topic) == 0; });
+    if (it != _subs.end())
+    {
+        _subs.erase(it);
+        if (mqttClient_.connected())
+        {
+            uint16_t id = mqttClient_.unsubscribe(topic);
+            return id != 0;
+        }
+        return false; // Not connected
+    }
+    else
+    {
+        Serial.printf("[MQTT] Attempted to unsubscribe from topic that was not subscribed to: %s\n", topic);
+        return false; // Not subscribed (warning / error)
+    }
 }
 
 void MqttService::onMessage(MessageCallback cb)
@@ -179,6 +209,7 @@ void MqttService::handleWifiEvent(WiFiEvent_t event)
 void MqttService::onMqttConnect(bool sessionPresent)
 {
     Serial.printf("[MQTT] Connected. sessionPresent=%d\n", sessionPresent);
+    resubscribeAll(); // Resubscribe to all topics
 }
 
 void MqttService::onMqttDisconnect(AsyncMqttClientDisconnectReason reason)

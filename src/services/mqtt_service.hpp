@@ -33,6 +33,11 @@ public:
                  uint8_t qos = 0, bool retain = false);
     bool publish(const char *topic, const char *payload, size_t len,
                  uint8_t qos = 0, bool retain = false);
+    struct Sub
+    {
+        const char *topic;
+        uint8_t qos;
+    };
     bool subscribe(const char *topic, uint8_t qos = 0);
     bool unsubscribe(const char *topic);
 
@@ -66,6 +71,9 @@ private:
                        AsyncMqttClientMessageProperties properties,
                        size_t len, size_t index, size_t total);
     void onMqttPublish(uint16_t packetId);
+
+    void resubscribeAll();
+    std::vector<Sub> _subs;
 
     // FreeRTOS timer callbacks
     static void mqttTimerCbStatic(TimerHandle_t);
