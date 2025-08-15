@@ -1,7 +1,7 @@
 #pragma once
 #include "itelemetry_provider.hpp"
 #include "../drivers/iesc_driver.hpp"
-#include "encoders/json_buf_writer.hpp"
+#include <json_buffer_writer.hpp>
 
 class EscTelemetryAdapter final : public ITelemetryProvider
 {
