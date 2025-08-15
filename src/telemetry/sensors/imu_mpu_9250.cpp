@@ -1,10 +1,11 @@
 #include "imu_mpu_9250.hpp"
+#include "logging/logger.hpp"
 
 bool IMU_MPU9250::begin()
 {
     if (!_imu.setup(0x68)) // Wire address
     {
-        Serial.println("[IMU_MPU9250] MPU connection failed");
+        LOGE("IMU_MPU9250", "[IMU_MPU9250] MPU connection failed");
         return false;
     }
 
@@ -17,7 +18,7 @@ TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
 
     if (!_imu.update())
     {
-        Serial.println("[IMU_MPU9250] IMU update failed");
+        LOGE("IMU_MPU9250", "[IMU_MPU9250] IMU update failed");
         return TelemetryStatus::ERROR;
     }
 
@@ -38,7 +39,7 @@ TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
     size_t len;
     if (!_jw.finalize(payload, len))
     {
-        Serial.println("[IMU_MPU9250] JSON finalization failed");
+        LOGE("IMU_MPU9250", "[IMU_MPU9250] JSON finalization failed");
         return TelemetryStatus::ERROR;
     }
 
@@ -53,7 +54,7 @@ TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
     out.meta.full_topic = false;                        // Not full topic
 
 #ifdef PERFORMANCE_MONITORING
-    Serial.printf("[IMU_MPU_9250] Sampled in %llu us\n", fasttime::elapsed_us(_last_sample_time));
+    LOGD("IMU_MPU_9250", "[IMU_MPU_9250] Sampled in %llu us", fasttime::elapsed_us(_last_sample_time));
 #endif
 
     return TelemetryStatus::OK;

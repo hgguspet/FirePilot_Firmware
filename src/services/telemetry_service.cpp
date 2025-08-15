@@ -1,5 +1,6 @@
 #include "telemetry_service.hpp"
 #include "mqtt_service.hpp"
+#include "logging/logger.hpp"
 
 TelemetryService &TelemetryService::instance()
 {
@@ -31,7 +32,7 @@ void TelemetryService::begin(const char *droneId, uint32_t tickHz)
     {
         if (!slot.provider->begin())
         {
-            Serial.printf("[TelemetryService] Failed to initialize provider: %s\n", slot.provider->name());
+            LOGE("TelemetryService", "[TelemetryService] Failed to initialize provider: %s", slot.provider->name());
         }
     }
 
@@ -42,7 +43,7 @@ void TelemetryService::begin(const char *droneId, uint32_t tickHz)
     xTaskCreatePinnedToCore(&TelemetryService::taskEntry, "telemetry_task",
                             4096, this, 1, &_taskHandle, 1 /* core */);
 
-    Serial.printf("[TelemetryService] Started @ %u Hz\n", _tickHz);
+    LOGI("TelemetryService", "[TelemetryService] Started @ %u Hz", _tickHz);
 }
 
 void TelemetryService::taskEntry(void *pvParameters)
@@ -68,7 +69,7 @@ void TelemetryService::run()
                 TelemetryStatus status = slot.provider->sample(sample);
                 if (status == TelemetryStatus::ERROR)
                 {
-                    Serial.printf("[TelemetryService] Error sampling %s\n", slot.provider->name());
+                    LOGE("TelemetryService", "[TelemetryService] Error sampling %s", slot.provider->name());
                 }
                 slot.nextTick += slot.periodTicks; // Schedule next sample
 

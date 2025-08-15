@@ -1,5 +1,6 @@
 #include "mqtt_service.hpp"
 #include "secrets.hpp"
+#include "logging/logger.hpp"
 
 // ===== Singleton =====
 MqttService &MqttService::instance()
@@ -61,7 +62,7 @@ void MqttService::begin(const char *wifiSsid, const char *wifiPassword,
         setServer(host, port);
     }
 
-    Serial.println("[MqttService] Starting Wi-Fi…");
+    LOGI("MqttService", "Starting Wi-Fi…");
     connectWifi();
 }
 
@@ -69,7 +70,7 @@ void MqttService::connectWifi()
 {
     if (WiFi.isConnected())
         return;
-    Serial.printf("[MqttService] Connecting to Wi-Fi SSID '%s'…\n", ssid_ ? ssid_ : "(null)");
+    LOGI("MqttService", "Connecting to Wi-Fi SSID '%s'…", ssid_ ? ssid_ : "(null)");
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid_, pass_);
 }
@@ -78,12 +79,12 @@ void MqttService::connectMqtt()
 {
     if (mqttHost_ == IPAddress() || mqttPort_ == 0)
     {
-        Serial.println("[MqttService] MQTT server not set. Call setServer() or pass host/port to begin().");
+        LOGE("MqttService", "MQTT server not set. Call setServer() or pass host/port to begin().");
         return;
     }
     if (mqttClient_.connected())
         return;
-    Serial.printf("[MqttService] Connecting to MQTT %s:%u…\n", mqttHost_.toString().c_str(), mqttPort_);
+    LOGI("MqttService", "Connecting to MQTT %s:%u…", mqttHost_.toString().c_str(), mqttPort_);
     mqttClient_.connect();
 }
 
@@ -91,7 +92,7 @@ void MqttService::disconnectMqtt()
 {
     if (mqttClient_.connected())
     {
-        Serial.println("[MqttService] Disconnecting MQTT…");
+        LOGI("MqttService", "Disconnecting MQTT…");
         mqttClient_.disconnect();
     }
 }
@@ -120,7 +121,7 @@ bool MqttService::subscribe(const char *topic, uint8_t qos)
     _subs.push_back(Sub{topic, qos});
     if (!mqttClient_.connected())
     {
-        Serial.printf("[MQTT] Queued sub '%s' not yet connected\n", topic);
+        LOGW("MqttService", "Queued sub '%s' not yet connected", topic);
         return true; // Queued
     }
     uint16_t id = mqttClient_.subscribe(topic, qos);
@@ -132,8 +133,8 @@ void MqttService::resubscribeAll()
     for (const auto &sub : _subs)
     {
         uint16_t id = mqttClient_.subscribe(sub.topic, sub.qos);
-        Serial.printf("[MQTT] (Re)subscribe '%s' qos=%u -> id=%u\n",
-                      sub.topic, sub.qos, id);
+        LOGI("MqttService", "(Re)subscribe '%s' qos=%u -> id=%u",
+             sub.topic, sub.qos, id);
     }
 }
 
@@ -155,7 +156,7 @@ bool MqttService::unsubscribe(const char *topic)
     }
     else
     {
-        Serial.printf("[MQTT] Attempted to unsubscribe from topic that was not subscribed to: %s\n", topic);
+        LOGW("MqttService", "Attempted to unsubscribe from topic that was not subscribed to: %s", topic);
         return false; // Not subscribed (warning / error)
     }
 }
@@ -188,16 +189,15 @@ void MqttService::wifiTimerCbStatic(TimerHandle_t t)
 // ===== Event handlers =====
 void MqttService::handleWifiEvent(WiFiEvent_t event)
 {
-    Serial.printf("[WiFi-event] %d\n", event);
+    LOGI("MqttService", "[WiFi-event] %d", event);
     switch (event)
     {
     case SYSTEM_EVENT_STA_GOT_IP:
-        Serial.print("[WiFi] Connected. IP: ");
-        Serial.println(WiFi.localIP());
+        LOGI("MqttService", "[WiFi] Connected. IP: %s", WiFi.localIP().toString().c_str());
         connectMqtt();
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
-        Serial.println("[WiFi] Disconnected.");
+        LOGW("MqttService", "[WiFi] Disconnected.");
         xTimerStop(mqttReconnectTimer_, 0); // don't race reconnects
         xTimerStart(wifiReconnectTimer_, 0);
         break;
@@ -208,13 +208,13 @@ void MqttService::handleWifiEvent(WiFiEvent_t event)
 
 void MqttService::onMqttConnect(bool sessionPresent)
 {
-    Serial.printf("[MQTT] Connected. sessionPresent=%d\n", sessionPresent);
+    LOGI("MqttService", "[MQTT] Connected. sessionPresent=%d", sessionPresent);
     resubscribeAll(); // Resubscribe to all topics
 }
 
 void MqttService::onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
-    Serial.printf("[MQTT] Disconnected. reason=%d\n", static_cast<int>(reason));
+    LOGI("MqttService", "[MQTT] Disconnected. reason=%d", static_cast<int>(reason));
     if (WiFi.isConnected())
     {
         xTimerStart(mqttReconnectTimer_, 0);
@@ -223,17 +223,17 @@ void MqttService::onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 
 void MqttService::onMqttSubscribe(uint16_t packetId, uint8_t qos)
 {
-    Serial.printf("[MQTT] Subscribed. id=%u qos=%u\n", packetId, qos);
+    LOGI("MqttService", "[MQTT] Subscribed. id=%u qos=%u", packetId, qos);
 }
 
 void MqttService::onMqttUnsubscribe(uint16_t packetId)
 {
-    Serial.printf("[MQTT] Unsubscribed. id=%u\n", packetId);
+    LOGI("MqttService", "[MQTT] Unsubscribed. id=%u", packetId);
 }
 
 void MqttService::onMqttPublish(uint16_t packetId)
 {
-    Serial.printf("[MQTT] Publish ACK. id=%u\n", packetId);
+    LOGI("MqttService", "[MQTT] Publish ACK. id=%u", packetId);
 }
 
 void MqttService::onMqttMessage(char *topic, char *payload,
@@ -251,8 +251,8 @@ void MqttService::onMqttMessage(char *topic, char *payload,
     }
     else
     {
-        Serial.printf("[MQTT] Message topic=%s len=%u qos=%u retain=%u idx=%u total=%u\n",
-                      topic, (unsigned)len, properties.qos, properties.retain,
-                      (unsigned)index, (unsigned)total);
+        LOGI("MqttService", "[MQTT] Message topic=%s len=%u qos=%u retain=%u idx=%u total=%u",
+             topic, (unsigned)len, properties.qos, properties.retain,
+             (unsigned)index, (unsigned)total);
     }
 }
