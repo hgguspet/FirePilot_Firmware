@@ -7,11 +7,8 @@
 
 #include "telemetry/sensors/imu_mpu_9250.hpp"
 
-<<<<<<< HEAD
 #include <Arduino.h>
 
-=======
->>>>>>> cd97366fa5809715323453f5d56d46cb95f47380
 // ===== Accessed Hardware ======================================================
 static IMU_MPU9250 imu;
 // ==============================================================================
@@ -59,11 +56,4 @@ void setup()
   telem.begin(deviceId, 100); // 100Hz tick rate
 }
 
-<<<<<<< HEAD
-void loop()
-{
-  LOGI("CHIP ID: %s", deviceId);
-}
-=======
 void loop() {}
->>>>>>> cd97366fa5809715323453f5d56d46cb95f47380
