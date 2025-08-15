@@ -1,10 +1,24 @@
-#include "services/mqtt_service.hpp"
 #include "logging/logger.hpp"
 #include "logging/sinks/mqtt_sink.hpp"
 #include "logging/sinks/serial_sink.hpp"
 
+#include "services/mqtt_service.hpp"
+#include "services/telemetry_service.hpp"
+
+#include "telemetry/sensors/imu_mpu_9250.hpp"
+
+// ===== Accessed Hardware ======================================================
+static IMU_MPU9250 imu;
+// ==============================================================================
+
+// ===== Config =================================================================
+static const char *deviceId = "Drone";
+static const char *logTopic = "log";
+// ==============================================================================
+
 void setup()
 {
+  // ===== Setup Logger (Should always be first) ================================
   Serial.begin(115200);
   while (!Serial)
   {
@@ -13,8 +27,6 @@ void setup()
 
   // Bring up Wi-Fi + MQTT
   auto &mqtt = MqttService::instance();
-  mqtt.begin(nullptr, nullptr, IPAddress(192, 168, 1, 10), 1883);
-  mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
 
   auto &log = Logger::instance();
   log.init(256);
@@ -24,18 +36,22 @@ void setup()
   log.addSink(&serial_sink);
 
   // Add MQTT sink (device id is optional; helps when multiple FCs publish)
-  static MqttSink mqtt_sink(mqtt, "log", "Drone");
+  static MqttSink mqtt_sink(mqtt, logTopic, deviceId);
   log.addSink(&mqtt_sink);
 
   LOGI("BOOT", "MQTT sink ready, ip=%s", WiFi.localIP().toString().c_str());
+
+  // ===== Hardware interface initialization ====================================
+  Wire.begin(); // Initialize I2C bus
+
+  // ===== Setup MQTT Client ====================================================
+  mqtt.begin(nullptr, nullptr, IPAddress(192, 168, 1, 10), 1883);
+  mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
+
+  // ===== Setup Telemetry Service ==============================================
+  auto &telem = TelemetryService::instance();
+  telem.addProvider(&imu);
+  telem.begin(deviceId, 100); // 100Hz tick rate
 }
 
-void loop()
-{
-  static uint32_t last = 0;
-  if (millis() - last > 2000)
-  {
-    last = millis();
-    LOGI("HEART", "alive ms=%lu", (unsigned long)millis());
-  }
-}
+void loop() {}
