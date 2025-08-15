@@ -21,6 +21,10 @@ TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
         return TelemetryStatus::ERROR;
     }
 
+    // Reset JSON writer
+    _jw.reset(_buf, _buf_size);
+
+    // Create json string
     _jw.beginObject();
     _jw.key("roll");
     _jw.value(_imu.getRoll());
@@ -28,14 +32,17 @@ TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
     _jw.value(_imu.getPitch());
     _jw.key("yaw");
     _jw.value(_imu.getYaw());
+    _jw.endObject();
 
     const uint8_t *payload;
     size_t len;
     if (!_jw.finalize(payload, len))
+    {
+        Serial.println("[IMU_MPU9250] JSON finalization failed");
         return TelemetryStatus::ERROR;
+    }
 
     const char *topic = "imu";
-
     out.topic_suffix = topic;
     out.payload = payload;
     out.payload_length = len;

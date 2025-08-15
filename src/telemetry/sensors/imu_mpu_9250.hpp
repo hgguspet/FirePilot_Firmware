@@ -1,6 +1,6 @@
 #pragma once
 #include "../itelemetry_provider.hpp"
-#include "../encoders/json_buf_writer.hpp"
+#include <json_buffer_writer.hpp>
 
 // lib
 #include <Arduino.h>
@@ -29,5 +29,6 @@ private:
 
     // Json Encoding
     uint8_t _buf[256];
-    JsonBufWriter _jw;
+    constexpr static size_t _buf_size = sizeof(_buf);
+    JsonBufWriter _jw{_buf, _buf_size};
 };

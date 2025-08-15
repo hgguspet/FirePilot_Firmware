@@ -66,6 +66,10 @@ void TelemetryService::run()
             {
                 TelemetrySample sample;
                 TelemetryStatus status = slot.provider->sample(sample);
+                if (status == TelemetryStatus::ERROR)
+                {
+                    Serial.printf("[TelemetryService] Error sampling %s\n", slot.provider->name());
+                }
                 slot.nextTick += slot.periodTicks; // Schedule next sample
 
                 if (status == TelemetryStatus::OK && sample.payload && sample.payload_length)
