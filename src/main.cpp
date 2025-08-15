@@ -1,54 +1,140 @@
-// ====== Potential Flags ======
-// #define PERFORMANCE_MONITORING 1
-
 #include <Arduino.h>
+#include <Wire.h>
 #include "services/mqtt_service.hpp"
-#include "services/telemetry_service.hpp"
-#include "telemetry/sensors/imu_mpu_9250.hpp"
-#include "drivers/esc/dshot600.hpp"
+// #include "services/telemetry_service.hpp"
+// #include "telemetry/sensors/imu_mpu_9250.hpp"
+#include "drivers/esc/d_shot_600.hpp"
 
 static DShot600Driver esc1;
+// static IMU_MPU9250 imu; // Global IMU instance
 
-static IMU_MPU9250 imu; // Global IMU instance
-const char *deviceId = "Drone";
+// ---------- config ----------
+static const char *deviceId = "Drone";
+static const char *escTopic = "Drone/manual/esc";
+static const int ESC_PIN = 32;    // change if you want another pin
+static const int ESC_RATE = 2000; // 2 kHz DShot600
+// ----------------------------
+
+static volatile float g_targetNorm = 0.0f;
+
+static String payloadToString(const uint8_t *data, size_t len)
+{
+  String s;
+  s.reserve(len + 1);
+  for (size_t i = 0; i < len; ++i)
+    s += (char)data[i];
+  s.trim();
+  return s;
+}
+
+static bool tryParseNorm01(const String &in, float &out)
+{
+  String s = in;
+  s.trim();
+  s.replace(',', '.');
+  int first = -1, last = -1;
+  for (int i = 0; i < (int)s.length(); ++i)
+  {
+    char c = s[i];
+    if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+')
+    {
+      first = i;
+      break;
+    }
+  }
+  if (first >= 0)
+  {
+    last = first;
+    while (last < (int)s.length())
+    {
+      char c = s[last];
+      if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+')
+      {
+        ++last;
+      }
+      else
+        break;
+    }
+    String num = s.substring(first, last);
+    float v = num.toFloat();
+    if (!isnan(v))
+    {
+      if (v < 0.f)
+        v = 0.f;
+      if (v > 1.f)
+        v = 1.f;
+      out = v;
+      return true;
+    }
+  }
+  return false;
+}
 
 void setup()
 {
-  // Serial
   Serial.begin(115200);
   while (!Serial)
-    delay(100);
+    delay(10);
 
-  // Wire
   Wire.begin();
-  Wire.setClock(400000); // 400kHz
+  Wire.setClock(400000);
 
-  delay(1000); // Give time for Serial and wire to stabilize
+  delay(300);
 
-  // MQTT setup
-  MqttService::instance().setServer(IPAddress(192, 168, 1, 200), 1883);
-  MqttService::instance().begin(nullptr, nullptr);
+  auto &mqtt = MqttService::instance();
+  mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
+  mqtt.begin(nullptr, nullptr);
+  mqtt.subscribe(escTopic);
 
-  // Subscribe to topics
-  const char *escTopic = "Drone/manual/esc";
-  MqttService::instance().subscribe(escTopic);
-
-  MqttService::instance()
-      .onMessage([](const char *topic, const uint8_t *data, size_t len,
+  mqtt.onMessage([](const char *topic,
+                    const uint8_t *data,
+                    size_t len,
                     const AsyncMqttClientMessageProperties &props)
-                 { Serial.printf("RX %s (%u bytes, qos=%u)\n", topic, (unsigned)len, props.qos); });
+                 {
+    (void)props;
+    if (strcmp(topic, escTopic) != 0) return;
 
-  // Telemetry setup
-  auto &telem = TelemetryService::instance();
-  telem.addProvider(&imu);
-  telem.begin(deviceId, 100); // telemetry @ 100Hz
+    String msg = payloadToString(data, len);
+    Serial.printf("MQTT <%s>: \"%s\"\n", topic, msg.c_str());
 
-  // ESC setup
-  esc1.begin(4, 1000);
+    if (msg.equalsIgnoreCase("arm"))    { esc1.arm(true);  Serial.println("ESC: armed"); g_targetNorm = 0.0f; return; }
+    if (msg.equalsIgnoreCase("disarm")) { esc1.arm(false); Serial.println("ESC: disarmed"); g_targetNorm = 0.0f; return; }
+
+    float v;
+    if (tryParseNorm01(msg, v)) {
+      g_targetNorm = v;
+      Serial.printf("ESC: throttle=%.3f\n", (double)v);
+    } else {
+      Serial.println("ESC: ignored payload");
+    } });
+
+  // Telemetry disabled:
+  // auto &telem = TelemetryService::instance();
+  // telem.addProvider(&imu);
+  // telem.begin(deviceId, 100);
+
+  if (!esc1.begin(ESC_PIN, ESC_RATE))
+  {
+    Serial.println("ESC init failed");
+    for (;;)
+      delay(1000);
+  }
+  esc1.arm(true);
+
+  uint32_t t0 = millis();
+  while (millis() - t0 < 2000)
+  {
+    esc1.writeNormalized(0.0f);
+    yield();
+  }
+
+  Serial.printf("ESC ready on GPIO %d @ %d Hz. MQTT topic: %s\n", ESC_PIN, ESC_RATE, escTopic);
 }
 
 void loop()
 {
-  esc1.writeNormalized(0.5f); // Example: set ESC to 50% throttle
-  delayMicroseconds(500);     // ~2Khz
+  float target = g_targetNorm;
+  esc1.writeNormalized(target);
+  delayMicroseconds(500); // ≈ 2 kHz DShot command rate
+  // or: delayMicroseconds(250); // ≈ 4 kHz
 }
