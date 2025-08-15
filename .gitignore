@@ -1,3 +1,4 @@
 .pio
 secrets.hpp
-.vscode/
+.vscode
+.vs
