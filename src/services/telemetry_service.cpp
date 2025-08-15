@@ -32,7 +32,7 @@ void TelemetryService::begin(const char *droneId, uint32_t tickHz)
     {
         if (!slot.provider->begin())
         {
-            LOGE("TelemetryService", "[TelemetryService] Failed to initialize provider: %s", slot.provider->name());
+            LOGE("TelemetryService", "Failed to initialize provider: %s", slot.provider->name());
         }
     }
 
@@ -43,7 +43,7 @@ void TelemetryService::begin(const char *droneId, uint32_t tickHz)
     xTaskCreatePinnedToCore(&TelemetryService::taskEntry, "telemetry_task",
                             4096, this, 1, &_taskHandle, 1 /* core */);
 
-    LOGI("TelemetryService", "[TelemetryService] Started @ %u Hz", _tickHz);
+    LOGI("TelemetryService", "Started @ %u Hz", _tickHz);
 }
 
 void TelemetryService::taskEntry(void *pvParameters)
@@ -69,7 +69,7 @@ void TelemetryService::run()
                 TelemetryStatus status = slot.provider->sample(sample);
                 if (status == TelemetryStatus::ERROR)
                 {
-                    LOGE("TelemetryService", "[TelemetryService] Error sampling %s", slot.provider->name());
+                    LOGE("TelemetryService", "Error sampling %s", slot.provider->name());
                 }
                 slot.nextTick += slot.periodTicks; // Schedule next sample
 
