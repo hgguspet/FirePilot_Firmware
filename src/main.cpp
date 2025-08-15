@@ -3,6 +3,7 @@
 #include "services/mqtt_service.hpp"
 // #include "services/telemetry_service.hpp"
 // #include "telemetry/sensors/imu_mpu_9250.hpp"
+#include "drivers/iesc_driver.hpp"
 #include "drivers/esc/d_shot_600.hpp"
 
 static DShot600Driver esc1;
@@ -135,6 +136,12 @@ void loop()
 {
   float target = g_targetNorm;
   esc1.writeNormalized(target);
+
+  IEscDriver::Telemetry tlm;
+  esc1.readTelemetry(tlm);
+
+  Serial.printf("ESC telemetry: %d %d %d %d\n", tlm.rpm, tlm.milliamps, tlm.millivolts, tlm.temperatureC);
+
   delayMicroseconds(500); // ≈ 2 kHz DShot command rate
   // or: delayMicroseconds(250); // ≈ 4 kHz
 }
