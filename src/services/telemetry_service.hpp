@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <atomic>
 #include <Arduino.h>
 extern "C"
 {
@@ -14,32 +15,27 @@ class TelemetryService
 public:
     static TelemetryService &instance();
 
-    void begin(const char *droneId, uint32_t tickHz = 100); // create task @ `tickHz`
+    void begin(const char *droneId, size_t queueLen = 64, UBaseType_t txPrio = 2,
+               uint32_t txStackWords = 4096, BaseType_t txCore = tskNO_AFFINITY); // create telemetry post task @ `tickHz`
     void addProvider(ITelemetryProvider *provider);
 
-    // I2C mutex for bus safety
+    /**
+     * @brief For i2c bus safety always request the handle before using the bus.
+     */
     SemaphoreHandle_t i2cMutex() const { return _i2cMutex; };
 
 private:
-    TelemetryService() = default;
-    TelemetryService(const TelemetryService &) = delete;
-    TelemetryService &operator=(const TelemetryService &) = delete;
+    explicit TelemetryService() = default;
 
-    struct Slot
-    {
-        ITelemetryProvider *provider{nullptr};
-        uint32_t periodTicks{0}; // in FreeRTOS ticks
-        uint32_t nextTick{0};    // next tick to sample
-    };
+    static void _txThunk(void *arg);
+    void _txLoop();
 
-    static void taskEntry(void *pvParameters);
-    void run();
+    void transmit(const char *topic, const TelemetrySample &s);
 
 private:
-    std::vector<Slot> _slots;
-    TaskHandle_t _taskHandle{nullptr};
+    std::vector<ITelemetryProvider *> _providers;
+    QueueHandle_t _queue{nullptr};
+    TaskHandle_t _txTask{nullptr};
     SemaphoreHandle_t _i2cMutex{nullptr};
-    String _droneId{"drone-01"};
-    uint32_t _tickHz{100}; // default tick rate
-    uint32_t _tick{0};
+    String _deviceId{"Drone"};
 };

@@ -1,5 +1,4 @@
 #include "mqtt_service.hpp"
-#include "secrets.hpp"
 #include "logging/logger.hpp"
 
 // ===== Singleton =====
@@ -54,8 +53,15 @@ void MqttService::setServer(const IPAddress &host, uint16_t port)
 void MqttService::begin(const char *wifiSsid, const char *wifiPassword,
                         const IPAddress &host, uint16_t port)
 {
-    ssid_ = wifiSsid ? wifiSsid : secrets::wifi_ssid;
-    pass_ = wifiPassword ? wifiPassword : secrets::wifi_password;
+    // nullptr guard
+    if (!wifiSsid || !wifiPassword)
+    {
+        LOGE("MqttService", "Wi-Fi credentials not provided");
+        return;
+    }
+
+    ssid_ = wifiSsid;
+    pass_ = wifiPassword;
 
     if (host != IPAddress() && port != 0)
     {

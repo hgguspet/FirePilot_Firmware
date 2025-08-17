@@ -11,15 +11,19 @@
 
 #include <Arduino.h>
 
-// ===== Accessed Hardware ======================================================
-static IMU_MPU9250 imu;
-// ==============================================================================
-
 // ===== Config =================================================================
-static const char *deviceId = "Drone";
-static const char *logTopic = "log";
+static const char *DEVICE_ID = "Drone";
+static const char *LOG_TOPIC = "log";
+
+static constexpr uint32_t IMU_RATE = 2;           // Hz
+static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
 // ==============================================================================
 
+// ===== Accessed Hardware ======================================================
+static IMU_MPU9250 imu(/*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
+                       /*topicSuffix*/ "telemetry/imu");
+
+// ==============================================================================
 void setup()
 {
   // ===== Setup Logger (Should always be first) ================================
@@ -40,7 +44,7 @@ void setup()
   log.addSink(&serial_sink);
 
   // Add MQTT sink (device id is optional; helps when multiple FCs publish)
-  static MqttSink mqtt_sink(mqtt, logTopic, deviceId);
+  static MqttSink mqtt_sink(mqtt, LOG_TOPIC, DEVICE_ID);
   log.addSink(&mqtt_sink);
 
   LOGI("BOOT", "MQTT sink ready, ip=%s", WiFi.localIP().toString().c_str());
@@ -49,7 +53,7 @@ void setup()
   Wire.begin(); // Initialize I2C bus
 
   // ===== Setup MQTT Client ====================================================
-  mqtt.begin(nullptr, nullptr);
+  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password);
   if (secrets::mqtt_broker && secrets::mqtt_port)
   {
     mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
@@ -61,9 +65,20 @@ void setup()
   }
 
   // ===== Setup Telemetry Service ==============================================
-  auto &telem = TelemetryService::instance();
-  telem.addProvider(&imu);
-  telem.begin(deviceId, 100); // 100Hz tick rate
+  auto &svc = TelemetryService::instance();
+  svc.begin(DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
+            /*txPrio=*/2, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+
+  // Hand shared I2C mutex to providers that use it
+  imu.setI2CMutex(svc.i2cMutex());
+
+  // Register IMU provider
+  svc.addProvider(&imu);
 }
 
-void loop() {}
+void loop()
+{
+  // Nothing required here unless you need to pump WiFi/MQTT client, etc.
+  // delay to keep the watchdog happy if absolutely idle
+  delay(1000);
+}

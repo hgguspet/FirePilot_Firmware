@@ -1,100 +1,111 @@
+// telemetry_service.cpp
 #include "telemetry_service.hpp"
-#include "mqtt_service.hpp"
 #include "logging/logger.hpp"
+#include "mqtt_service.hpp" // TODO: Allow for publishing through sinks and logger instead? or something
+
+#include <cstring> // strlen
+
+extern "C"
+{
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
+}
 
 TelemetryService &TelemetryService::instance()
 {
-    static TelemetryService instance;
-    return instance;
+    static TelemetryService inst;
+    return inst;
+}
+
+void TelemetryService::begin(const char *droneId,
+                             size_t queueLen,
+                             UBaseType_t txPrio,
+                             uint32_t txStackWords,
+                             BaseType_t txCore)
+{
+    _deviceId = droneId ? droneId : "Drone";
+
+    _queue = xQueueCreate(queueLen, sizeof(TelemetrySample));
+    if (!_queue)
+    {
+        LOGE("Telemetry", "Failed to create telemetry queue");
+        return;
+    }
+
+    _i2cMutex = xSemaphoreCreateMutex();
+    if (!_i2cMutex)
+    {
+        LOGW("Telemetry", "Failed to create I2C mutex");
+        // Continue, but providers that use I2C should check for null
+    }
+
+    const BaseType_t ok = xTaskCreatePinnedToCore(
+        &_txThunk, "TelemetryTx", txStackWords, this, txPrio, &_txTask, txCore);
+    if (ok != pdPASS)
+    {
+        LOGE("Telemetry", "Failed to create TX task");
+    }
 }
 
 void TelemetryService::addProvider(ITelemetryProvider *provider)
 {
-    if (!provider)
+    if (!provider || !_queue)
         return;
 
-    Slot slot;
-    slot.provider = provider;
+    provider->setOutputQueue(_queue);
 
-    // Period in ticks  (tickHz_ / rate_hq), min 1
-    slot.periodTicks = provider->sampleRateHz() ? max(1, static_cast<int>(_tickHz / provider->sampleRateHz())) : _tickHz;
-    slot.nextTick = _tick; // Start immediately
-    _slots.push_back(slot);
-}
-
-void TelemetryService::begin(const char *droneId, uint32_t tickHz)
-{
-    if (droneId && *droneId)
-        _droneId = droneId;
-
-    //   Init  providers
-    for (auto &slot : _slots)
+    if (provider->begin())
     {
-        if (!slot.provider->begin())
-        {
-            LOGE("TelemetryService", "Failed to initialize provider: %s", slot.provider->name());
-        }
+        _providers.push_back(provider);
+        LOGI("Telemetry", "Provider added: %s", provider->name());
     }
-
-    // Shared I2C mutex
-    _i2cMutex = xSemaphoreCreateMutex();
-
-    // Start task
-    xTaskCreatePinnedToCore(&TelemetryService::taskEntry, "telemetry_task",
-                            4096, this, 1, &_taskHandle, 1 /* core */);
-
-    LOGI("TelemetryService", "Started @ %u Hz", _tickHz);
-}
-
-void TelemetryService::taskEntry(void *pvParameters)
-{
-    reinterpret_cast<TelemetryService *>(pvParameters)->run();
-}
-
-void TelemetryService::run()
-{
-    const TickType_t tickPeriod = pdMS_TO_TICKS(1000 / _tickHz);
-    TickType_t last = xTaskGetTickCount();
-    while (true)
+    else
     {
-        vTaskDelayUntil(&last, tickPeriod);
-        _tick++;
+        LOGE("Telemetry", "Provider init failed: %s", provider->name());
+    }
+}
 
-        // Iterate providers and trigger due ones
-        for (auto &slot : _slots)
+void TelemetryService::_txThunk(void *arg)
+{
+    static_cast<TelemetryService *>(arg)->_txLoop();
+}
+
+void TelemetryService::_txLoop()
+{
+    TelemetrySample s{};
+    for (;;)
+    {
+        if (xQueueReceive(_queue, &s, portMAX_DELAY) == pdTRUE)
         {
-            if (_tick >= slot.nextTick)
+            // Build final topic
+            String topic;
+            if (s.meta.full_topic)
             {
-                TelemetrySample sample;
-                TelemetryStatus status = slot.provider->sample(sample);
-                if (status == TelemetryStatus::ERROR)
-                {
-                    LOGE("TelemetryService", "Error sampling %s", slot.provider->name());
-                }
-                slot.nextTick += slot.periodTicks; // Schedule next sample
-
-                if (status == TelemetryStatus::OK && sample.payload && sample.payload_length)
-                {
-                    if (sample.meta.full_topic)
-                    {
-                        // Publish to full topic
-                        MqttService::instance().publish(sample.topic_suffix, reinterpret_cast<const char *>(sample.payload), sample.payload_length,
-                                                        0 /*  QoS */, false /* retain */);
-                    }
-                    else
-                    {
-                        // Compose topic
-                        String topic = _droneId + "/";
-                        topic += "telemetry/";
-                        topic += sample.topic_suffix ? sample.topic_suffix : slot.provider->name();
-
-                        // Publish (ignore if not connected)
-                        MqttService::instance().publish(topic.c_str(),
-                                                        reinterpret_cast<const char *>(sample.payload), sample.payload_length,
-                                                        0 /*  QoS */, false /* retain */);
-                    }
-                }
+                topic = s.topic_suffix ? s.topic_suffix : "";
             }
+            else
+            {
+                const size_t suffixLen = s.topic_suffix ? std::strlen(s.topic_suffix) : 0;
+                topic.reserve(_deviceId.length() + 1 + suffixLen);
+                topic = _deviceId;
+                topic += '/';
+                if (s.topic_suffix)
+                    topic += s.topic_suffix;
+            }
+
+            LOGI("Telemetry", "Transmitting telemetry sample, topic %s", topic.c_str());
+            // Transmit now (do not stash pointers for later)
+            transmit(topic.c_str(), s);
         }
     }
+}
+
+void TelemetryService::transmit(const char *topic, const TelemetrySample &s)
+{
+    // (For now) Publish directly through MQTT
+    MqttService::instance().publish(
+        topic, reinterpret_cast<const char *>(s.payload), s.payload_length,
+        s.meta.qos, s.meta.retain);
 }

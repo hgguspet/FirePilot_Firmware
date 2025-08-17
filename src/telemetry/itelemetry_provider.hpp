@@ -1,19 +1,17 @@
 #pragma once
-#include <stdint.h>
-#include <stddef.h>
-#include <esp23_fast_timestamp.h>
-
 /**
  * @file itelemetry_provider.hpp
  * @brief Interfaces and data types for producing telemetry samples.
  */
 
-enum class TelemetryStatus : uint8_t
+#include <stdint.h>
+#include <stddef.h>
+
+extern "C"
 {
-    OK,
-    NO_DATA,
-    ERROR
-};
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+}
 
 enum class TelemetryContentType : uint8_t
 {
@@ -25,19 +23,23 @@ enum class TelemetryContentType : uint8_t
 
 struct TelemetryMeta
 {
-    fasttime::Timestamp timestamp;
     uint8_t qos = 0;
     bool retain = false;
     TelemetryContentType content_type = TelemetryContentType::JSON;
     bool full_topic = false;
 };
 
+/**
+ * @brief Telemetry sample descriptor passed through the queue.
+ * NOTE: topic_suffix/payload must point to storage that remains valid
+ * until the consumer has used them (provider should double-buffer or similar).
+ */
 struct TelemetrySample
 {
-    const char *topic_suffix;
-    const uint8_t *payload;
-    size_t payload_length;
-    TelemetryMeta meta;
+    const char *topic_suffix{nullptr};
+    const uint8_t *payload{nullptr};
+    size_t payload_length{0};
+    TelemetryMeta meta{};
 };
 
 class ITelemetryProvider
@@ -48,18 +50,47 @@ public:
     /// @return Short, stable provider name (e.g., "imu", "baro").
     virtual const char *name() const = 0;
 
-    /// @return Target sampling frequency in Hz.
+    /// @return Wanted sampling rate in Hz.
     virtual uint32_t sampleRateHz() const = 0;
 
     /// Initialize hardware/resources. Return false on fatal error.
     virtual bool begin() = 0;
 
-    /// Fill @p out with the next sample if available.
-    virtual TelemetryStatus sample(TelemetrySample &out) = 0;
+    /// Called when e.g. TelemetryService changes sampling rate of this provider.
+    virtual void onSamplingRateChange(uint32_t newRateHz) { (void)newRateHz; }
 
-    /// Called when the scheduler changes the polling rate.
-    virtual void onRateChange(uint32_t newRateHz) { (void)newRateHz; }
+    /// Wire the output queue before tasks start.
+    void setOutputQueue(QueueHandle_t qHandle) { _out = qHandle; }
 
-    /// Absolute time when the next sample is due, or default for ASAP.
-    virtual fasttime::Timestamp nextDueTimestamp() const { return {}; }
+protected:
+    /**
+     * @brief Publish by value (no heap). Returns false on failure.
+     * @param timeoutTicks Use 0 to drop when the queue is full; or a small timeout for backpressure.
+     *
+     * @warning IMPORTANT: The queue must be created with item_size == sizeof(TelemetrySample).
+     * The pointed-to buffers must remain valid until the consumer is done.
+     */
+    bool publish(const TelemetrySample &sample, TickType_t timeoutTicks = 0)
+    {
+        if (!_out)
+        {
+            return false;
+        }
+        // FreeRTOS will copy sizeof(TelemetrySample) bytes into the queue
+        return xQueueSend(_out, &sample, timeoutTicks) == pdTRUE;
+    }
+
+    /**
+     * @brief Overwrite the single-slot queue (latest-only semantics).
+     * Only use if _out refers to a queue created with length==1.
+     */
+    bool publishOverwrite(const TelemetrySample &sample)
+    {
+        if (!_out)
+            return false;
+        return xQueueOverwrite(_out, &sample) == pdTRUE;
+    }
+
+private:
+    QueueHandle_t _out{nullptr};
 };

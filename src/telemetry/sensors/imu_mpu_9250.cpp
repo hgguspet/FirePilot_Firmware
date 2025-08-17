@@ -3,59 +3,111 @@
 
 bool IMU_MPU9250::begin()
 {
-    if (!_imu.setup(0x68)) // Wire address
+    // Guard setup: WHOAMI, config writes, etc.
+    if (_i2cMutex)
     {
-        LOGE("IMU_MPU9250", "[IMU_MPU9250] MPU connection failed");
+        xSemaphoreTake(_i2cMutex, portMAX_DELAY);
+    }
+    const bool ok = _imu.setup(0x68);
+    if (_i2cMutex)
+    {
+        xSemaphoreGive(_i2cMutex);
+    }
+
+    if (!ok)
+    {
+        LOGE("IMU_MPU9250", "MPU connection failed");
         return false;
     }
 
+    // Create sampling task
+    const BaseType_t rc = xTaskCreatePinnedToCore(
+        &_taskThunk, "IMU_MPU9250", 2048, this, 3, &_taskHandle, tskNO_AFFINITY);
+    if (rc != pdPASS)
+    {
+        LOGE("IMU_MPU9250", "Task create failed");
+        return false;
+    }
     return true;
 }
 
-TelemetryStatus IMU_MPU9250::sample(TelemetrySample &out)
+void IMU_MPU9250::_taskThunk(void *arg)
 {
-    _last_sample_time = fasttime::Timestamp::now();
+    static_cast<IMU_MPU9250 *>(arg)->_runLoop();
+}
 
-    if (!_imu.update())
+void IMU_MPU9250::_runLoop()
+{
+    TickType_t last = xTaskGetTickCount(); // run now
+    while (true)
     {
-        LOGE("IMU_MPU9250", "IMU update failed");
-        return TelemetryStatus::ERROR;
+        // Pace FIRST so failures can’t spin the loop
+        const uint32_t hz = _rateHz ? _rateHz : 1;
+        const TickType_t period =
+            (TickType_t)(((uint64_t)configTICK_RATE_HZ + hz - 1) / hz); // ceil
+
+        vTaskDelayUntil(&last, period);
+
+        // --- Read sensor (I2C protected) ---
+        if (_i2cMutex)
+        {
+            xSemaphoreTake(_i2cMutex, portMAX_DELAY);
+        }
+        else
+        {
+            // Warn about I2C mutex not taken
+            LOGW("IMU_MPU9250", "I2C mutex not taken");
+        }
+
+        const bool ok = _imu.update();
+
+        if (_i2cMutex)
+        {
+            xSemaphoreGive(_i2cMutex);
+        }
+
+        if (!ok)
+        {
+            LOGE("IMU_MPU9250", "IMU update failed");
+            continue;
+        }
+
+        // update current buffer
+        JsonBufWriter &jw = _jw[_buf_index];
+        jw.reset(_buf[_buf_index], sizeof(_buf[_buf_index]));
+        // Create json string
+        jw.beginObject();
+        jw.key("roll");
+        jw.value(_imu.getRoll());
+        jw.key("pitch");
+        jw.value(_imu.getPitch());
+        jw.key("yaw");
+        jw.value(_imu.getYaw());
+        jw.endObject();
+
+        const uint8_t *output;
+        size_t length;
+        if (!jw.finalize(output, length))
+        {
+            LOGE("IMU_MPU9250", "JSON finalization failed");
+            return;
+        }
+
+        TelemetrySample sample{
+            .topic_suffix = _topicSuffix,
+            .payload = output,
+            .payload_length = length,
+            .meta = TelemetryMeta{
+                .qos = 0,
+                .retain = false,
+                .content_type = TelemetryContentType::JSON,
+                .full_topic = false,
+            }};
+
+        // LOGI("IMU_MPU9250", "Publishing telemetry sample, topic %s", _topicSuffix);
+        (void)publish(sample, 0); // Non-blocking, drop if queue is full
+
+        // Flip buffer index
+        _buf_index = (_buf_index + 1) % sizeof(_buf) / sizeof(_buf[0]);
     }
-
-    // Reset JSON writer
-    _jw.reset(_buf, _buf_size);
-
-    // Create json string
-    _jw.beginObject();
-    _jw.key("roll");
-    _jw.value(_imu.getRoll());
-    _jw.key("pitch");
-    _jw.value(_imu.getPitch());
-    _jw.key("yaw");
-    _jw.value(_imu.getYaw());
-    _jw.endObject();
-
-    const uint8_t *payload;
-    size_t len;
-    if (!_jw.finalize(payload, len))
-    {
-        LOGE("IMU_MPU9250", "JSON finalization failed");
-        return TelemetryStatus::ERROR;
-    }
-
-    const char *topic = "imu";
-    out.topic_suffix = topic;
-    out.payload = payload;
-    out.payload_length = len;
-    out.meta.timestamp = _last_sample_time;
-    out.meta.content_type = TelemetryContentType::JSON; // JSON format
-    out.meta.qos = 0;                                   // Default QoS
-    out.meta.retain = false;                            // Not retained
-    out.meta.full_topic = false;                        // Not full topic
-
-#ifdef PERFORMANCE_MONITORING
-    LOGD("IMU_MPU_9250", "Sampled in %llu us", fasttime::elapsed_us(_last_sample_time));
-#endif
-
-    return TelemetryStatus::OK;
 }

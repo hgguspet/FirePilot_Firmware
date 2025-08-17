@@ -7,28 +7,45 @@
 #include <MPU9250.h>
 #include <esp23_fast_timestamp.h>
 
-#define FILTER_UPDATE_RATE_HZ 100
-
 class IMU_MPU9250 final : public ITelemetryProvider
 {
 public:
-    explicit IMU_MPU9250()
-        : _jw(_buf, sizeof(_buf)) {}
+    explicit IMU_MPU9250(SemaphoreHandle_t i2cMutex = nullptr, uint32_t rateHz = 200, const char *topicSuffix = "telemetry/imu")
+        : _i2cMutex(i2cMutex), _rateHz(rateHz), _topicSuffix(topicSuffix) {}
 
     const char *name() const override { return "IMU_MPU_9250"; }
-    uint32_t sampleRateHz() const override { return 100; } // 100Hz update rate
+    uint32_t sampleRateHz() const override { return _rateHz; }
+
     bool begin() override;
-    TelemetryStatus sample(TelemetrySample &out) override;
+
+    void setI2CMutex(SemaphoreHandle_t i2cMutex) { _i2cMutex = i2cMutex; }
+
+    void onSamplingRateChange(uint32_t newRateHz) override
+    {
+        _rateHz = (newRateHz == 0 ? 1 : newRateHz);
+    }
 
 private:
-    // Timing
-    fasttime::Timestamp _last_sample_time;
+    // Tasking / synchronization
+    static void _taskThunk(void *arg);
+    void _runLoop();
+    TaskHandle_t _taskHandle;
+    SemaphoreHandle_t _i2cMutex;
+
+    // Config
+    uint32_t _rateHz;
+    const char *_topicSuffix;
 
     // Sensor
     MPU9250 _imu;
 
+    // Double Buffering
+    uint8_t _buf[2][256];
+    size_t _len[2] = {0, 0};
+    uint8_t _buf_index = 0;
+
     // Json Encoding
-    uint8_t _buf[256];
-    constexpr static size_t _buf_size = sizeof(_buf);
-    JsonBufWriter _jw{_buf, _buf_size};
+    JsonBufWriter _jw[2] = {
+        JsonBufWriter(_buf[0], sizeof(_buf[0])),
+        JsonBufWriter(_buf[1], sizeof(_buf[1]))};
 };
