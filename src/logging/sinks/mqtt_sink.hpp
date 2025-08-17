@@ -5,8 +5,7 @@
 class MqttSink : public ILogSink
 {
 public:
-    // baseTopic: e.g. "fc/log"
-    // deviceId:  optional device name to nest under base (fc/log/<device>/LEVEL)
+    // as by this projects mqtt topic convention, the topic equates to: <deviceId>/log/<severity>
     // qos/retain: MQTT flags (keep qos=0, retain=false for logs)
     MqttSink(MqttService &svc,
              const char *baseTopic = "log",
