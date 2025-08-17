@@ -13,7 +13,7 @@ The goal is to keep MQTT communication **predictable**, **versioned**, and **eas
 - **Encoding:** UTF-8 JSON unless otherwise noted
 - **QoS:** `0` by default (may vary per topic)
 - **Retain:** `false` by default (may vary per topic)
-- **Timestamps:**  
+- **Timestamps (may or may not be provided):**  
   - Field `t` → integer, **microseconds since boot**  
   - If wall clock time is available, an additional `time` field (ISO-8601 UTC) may be included.
 
@@ -21,7 +21,7 @@ The goal is to keep MQTT communication **predictable**, **versioned**, and **eas
 
 ## Device ID
 
-`<deviceId>` uniquely identifies each flight controller.
+`<deviceId>` can uniquely identify each flight controller.
 
 - **Default:** `"Drone"`
 - **Configurable:** Can be changed in `main.cpp` before deployment.
