@@ -11,11 +11,20 @@
 
 #include <Arduino.h>
 
+// Priority hierarchy for drone:
+// 25: Hardware interrupts/critical safety
+// 20: Flight controller main loop
+// 18: IMU sampling
+// 15: Motor control PWM updates
+// 10: Navigation/GPS
+// 5:  Telemetry/logging
+// 1:  Housekeeping tasks
+
 // ===== Config =================================================================
 static const char *DEVICE_ID = "Drone";
 static const char *LOG_TOPIC = "log";
 
-static constexpr uint32_t IMU_RATE = 2;           // Hz
+static constexpr uint32_t IMU_RATE = 200;         // Hz
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
 // ==============================================================================
 
@@ -67,7 +76,7 @@ void setup()
   // ===== Setup Telemetry Service ==============================================
   auto &svc = TelemetryService::instance();
   svc.begin(DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
-            /*txPrio=*/2, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+            /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
 
   // Hand shared I2C mutex to providers that use it
   imu.setI2CMutex(svc.i2cMutex());

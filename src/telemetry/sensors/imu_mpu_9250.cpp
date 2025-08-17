@@ -22,7 +22,7 @@ bool IMU_MPU9250::begin()
 
     // Create sampling task
     const BaseType_t rc = xTaskCreatePinnedToCore(
-        &_taskThunk, "IMU_MPU9250", 2048, this, 3, &_taskHandle, tskNO_AFFINITY);
+        &_taskThunk, "IMU_MPU9250", 8196, this, 18, &_taskHandle, tskNO_AFFINITY);
     if (rc != pdPASS)
     {
         LOGE("IMU_MPU9250", "Task create failed");
@@ -108,6 +108,7 @@ void IMU_MPU9250::_runLoop()
         (void)publish(sample, 0); // Non-blocking, drop if queue is full
 
         // Flip buffer index
-        _buf_index = (_buf_index + 1) % sizeof(_buf) / sizeof(_buf[0]);
+        constexpr size_t kBufCount = sizeof(_buf) / sizeof(_buf[0]);
+        _buf_index = (_buf_index + 1) % kBufCount;
     }
 }
