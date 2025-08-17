@@ -7,6 +7,8 @@
 
 #include "telemetry/sensors/imu_mpu_9250.hpp"
 
+#include "secrets.hpp"
+
 #include <Arduino.h>
 
 // ===== Accessed Hardware ======================================================
@@ -47,8 +49,16 @@ void setup()
   Wire.begin(); // Initialize I2C bus
 
   // ===== Setup MQTT Client ====================================================
-  mqtt.begin(nullptr, nullptr, IPAddress(192, 168, 1, 10), 1883);
-  mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
+  mqtt.begin(nullptr, nullptr);
+  if (secrets::mqtt_broker && secrets::mqtt_port)
+  {
+    mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
+  }
+  else
+  {
+    // use default
+    mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
+  }
 
   // ===== Setup Telemetry Service ==============================================
   auto &telem = TelemetryService::instance();

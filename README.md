@@ -22,13 +22,15 @@
 
 ### Wi-Fi Credentials
 
-Configure your network settings in `src/secrets.hpp`:
+Configure your network settings in `src/secrets.hpp`, see config in `src/secrets.hpp.example`:
 
 ```cpp
 namespace secrets
 {
     const char *wifi_ssid = "YOUR_WIFI_SSID";
     const char *wifi_password = "YOUR_WIFI_PASSWORD";
+    const IPAddress mqtt_broker(192, 168, 1, 200);
+    const uint16_t mqtt_port = 1883;
 }
 ```
 
