@@ -58,6 +58,3 @@ FirePilot uses a modular architecture that allows for easy extension and customi
 - **Service Layer** – Core flight control and telemetry services
 - **Communication Protocol** – JSON-based message format for interoperability
 
-## Contributing
-
-Contributions are welcome! Please ensure all code follows the existing style conventions and includes appropriate documentation.
