@@ -1,8 +1,10 @@
 #pragma once
 #include <cstdint>
 
+typedef uint32_t EscFeature;
+
 // Capability flags (bitmask) so app can discover extras at runtime
-enum class EscFeature : uint32_t
+enum class EscFeatures : EscFeature
 {
     Telemetry = 1u << 0,    // readTelemetry() returns real data
     DirectionCmd = 1u << 1, // supports runtime direction changes
@@ -11,21 +13,29 @@ enum class EscFeature : uint32_t
     Beeper = 1u << 4,       // can beep via command
 };
 
-inline constexpr EscFeature operator|(EscFeature a, EscFeature b)
+inline constexpr EscFeature operator|(EscFeatures a, EscFeatures b)
 {
-    return EscFeature(uint32_t(a) | uint32_t(b));
+    return EscFeature(EscFeature(a) | EscFeature(b));
 }
-inline constexpr bool hasFeature(uint32_t mask, EscFeature f)
+inline constexpr bool hasFeature(EscFeature mask, EscFeatures f)
 {
-    return (mask & uint32_t(f)) != 0;
+    return (mask & EscFeature(f)) != 0;
 }
+
+struct EscUpdateRateHz
+{
+    uint16_t value = 0;
+    static constexpr uint16_t maxValue = 65535;
+    EscUpdateRateHz() = default;
+    explicit EscUpdateRateHz(uint16_t v) : value(v) {}
+};
 
 struct EscCapabilities
 {
-    uint32_t features = 0;   // bitmask of EscFeature
-    bool needsCalibrate : 1; // analog/PWM ESCs often do
-    bool bidirTelemetry : 1; // true if telemetry wire/command supported
-    uint16_t maxRateHz;      // conservative max command rate (e.g. 2000 for OS125, 4000 for DShot)
+    EscFeature features = 0;   // bitmask of EscFeature
+    bool needsCalibrate : 1;   // analog/PWM ESCs often do
+    bool bidirTelemetry : 1;   // true if telemetry wire/command supported
+    EscUpdateRateHz maxRateHz; // conservative max command rate (e.g. 2000 for OS125, 4000 for DShot)
 };
 
 class IEscDriver
@@ -36,6 +46,7 @@ public:
     // Lifecycle
     virtual bool begin(uint8_t pin, uint16_t rateHz) = 0; // pin is GPIO number
     virtual void end() = 0;
+    virtual bool calibrate() = 0;
     virtual EscCapabilities caps() const = 0;
 
     // Control path (hot). norm in [0..1]

@@ -12,6 +12,7 @@ public:
 
     bool begin(uint8_t pin, uint16_t rateHz) override;
     void end() override;
+    bool calibrate() override { return false; } // TODO: implement
 
     EscCapabilities caps() const override
     {
