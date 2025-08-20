@@ -28,6 +28,8 @@ public:
     // 0..1 -> 1000..2000 us pulse
     void writeNormalized(float norm01) override;
 
+    void setZeroThrottleValue(float norm01) override { _zeroThrottleValue = norm01; }
+
     // Sets target period via rate; clamped so period >= maxPulse + safety idle
     void setUpdateRate(uint16_t rateHz) override;
 
@@ -65,6 +67,8 @@ private:
     }
 
 private:
+    float _zeroThrottleValue = 0.0f;
+
     rmt_channel_t _ch = RMT_CHANNEL_MAX;
     uint8_t _pin = 0xFF;
     bool _armed = false;

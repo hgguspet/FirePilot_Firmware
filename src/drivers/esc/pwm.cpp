@@ -38,7 +38,8 @@ bool PwmDriver::begin(uint8_t pin, uint16_t rateHz)
     _pin = pin;
     _initialized = true;
 
-    setUpdateRate(rateHz); // applies caller’s rate if non-zero
+    setUpdateRate(rateHz);               // applies caller’s rate if non-zero
+    writeNormalized(_zeroThrottleValue); // set initial pulse
     return true;
 }
 

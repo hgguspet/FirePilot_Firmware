@@ -124,6 +124,8 @@ bool DShot600Driver::begin(uint8_t pin, uint16_t rateHz)
     if (rateHz)
         setUpdateRate(rateHz);           // Hz = command rate, not bitrate
     _next_due_us = esp_timer_get_time(); // allow immediate first send
+
+    writeNormalized(_zeroThrottleValue); // set initial pulse
     return true;
 }
 

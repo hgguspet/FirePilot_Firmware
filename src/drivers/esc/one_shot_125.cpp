@@ -39,7 +39,7 @@ bool OneShot125Driver::begin(uint8_t pin, uint16_t rateHz)
 
     // apply desired rate (if provided)
     setUpdateRate(rateHz);
-
+    writeNormalized(_zeroThrottleValue); // set initial pulse
     return true;
 }
 

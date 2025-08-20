@@ -52,6 +52,12 @@ public:
     // Control path (hot). norm in [0..1]
     virtual void writeNormalized(float norm01) = 0;
 
+    /**
+     * @warning DO NOT TOUCH THIS UNLESS YOU KNOW WHAT YOU ARE DOING!
+     * Calling this method can cause dangerous, unintended motor behavior.
+     */
+    virtual void setZeroThrottleValue(float norm01) = 0;
+
     // Optional, but common across protocols
     virtual void arm(bool on) { (void)on; } // default no-op
     virtual void setUpdateRate(uint16_t rateHz) = 0;

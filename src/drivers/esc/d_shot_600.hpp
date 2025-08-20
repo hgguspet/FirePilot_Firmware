@@ -21,7 +21,8 @@ public:
             /*.maxRateHz=*/4000};
     }
 
-    void writeNormalized(float norm01) override;  // 0..1 -> DShot throttle
+    void writeNormalized(float norm01) override; // 0..1 -> DShot throttle
+    void setZeroThrottleValue(float norm01) override { _zeroThrottleValue = norm01; };
     void setUpdateRate(uint16_t rateHz) override; // now enforced internally
 
     void arm(bool on) override { _armed = on; }
@@ -53,6 +54,8 @@ private:
     void buildItems(uint16_t packet, rmt_item32_t (&items)[kBits]) const;
 
 private:
+    float _zeroThrottleValue = 0.0f;
+
     rmt_channel_t _ch = RMT_CHANNEL_MAX;
     uint8_t _pin = 0xFF;
     bool _armed = false;
