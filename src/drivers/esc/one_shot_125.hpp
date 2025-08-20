@@ -18,7 +18,10 @@ public:
     {
         // No bidir telemetry, analog-style and many ESCs historically need calibration.
         // Max useful rate ~2 kHz (500 us period)
-        return EscCapabilities{/*bidirTelemetry*/ false, /*needsCalibrate*/ true, /*maxRateHz*/ 2000};
+        return EscCapabilities{
+            /*bidirTelemetry*/ false,
+            /*needsCalibrate*/ true,
+            /*maxRateHz*/ 2000};
     }
 
     void writeNormalized(float norm01) override;  // 0..1 -> 125..250 us pulse

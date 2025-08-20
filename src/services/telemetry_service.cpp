@@ -95,7 +95,6 @@ void TelemetryService::_txLoop()
                     topic += s.topic_suffix;
             }
 
-            LOGI("Telemetry", "Transmitting telemetry sample, topic %s", topic.c_str());
             // Transmit now (do not stash pointers for later)
             transmit(topic.c_str(), s);
         }

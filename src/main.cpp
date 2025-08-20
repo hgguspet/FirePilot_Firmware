@@ -154,15 +154,15 @@ void setup()
     (void)props;
     if (strcmp(topic, ESC_TOPIC) != 0) return;
     String msg = payloadToString(data, len);
-    Serial.printf("MQTT <%s>: \"%s\"\n", topic, msg.c_str());
-    if (msg.equalsIgnoreCase("arm"))    { esc1.arm(true);  Serial.println("ESC: armed"); g_targetNorm = 0.0f; return; }
-    if (msg.equalsIgnoreCase("disarm")) { esc1.arm(false); Serial.println("ESC: disarmed"); g_targetNorm = 0.0f; return; }
+    LOGI("MQTT <%s>: \"%s\"", topic, msg.c_str());
+    if (msg.equalsIgnoreCase("arm"))    { esc1.arm(true);  LOGI("ESC", "armed"); g_targetNorm = 0.0f; return; }
+    if (msg.equalsIgnoreCase("disarm")) { esc1.arm(false); LOGI("ESC", "disarmed"); g_targetNorm = 0.0f; return; }
     float v;
     if (tryParseNorm01(msg, v)) {
       g_targetNorm = v;
-      Serial.printf("ESC: throttle=%.3f\n", (double)v);
+      LOGI("ESC", "throttle=%.3f\n", (double)v);
     } else {
-      Serial.println("ESC: ignored payload");
+      LOGD("ESC", "ignored payload");
     } });
 
   // ===== Setup Telemetry Service ==============================================
@@ -179,7 +179,7 @@ void setup()
   // ===== Esc Setup ==============================================================
   if (!esc1.begin(ESC_PIN, ESC_RATE))
   {
-    Serial.println("ESC init failed");
+    LOGC("ESC", "init failed");
     for (;;)
       delay(1000);
   }
@@ -190,14 +190,12 @@ void setup()
     esc1.writeNormalized(0.0f);
     yield();
   }
-  Serial.printf("ESC ready on GPIO %d @ %d Hz. MQTT topic: %s\n", ESC_PIN, ESC_RATE, ESC_TOPIC);
+  LOGI("ESC", "ready on GPIO %d @ %d Hz. MQTT topic: %s\n", ESC_PIN, ESC_RATE, ESC_TOPIC);
 }
 
 void loop()
 {
-  // Nothing required here unless you need to pump WiFi/MQTT client, etc.
-  // delay to keep the watchdog happy if absolutely idle
   float target = g_targetNorm;
   esc1.writeNormalized(target);
-  delayMicroseconds(500); // ≈ 2 kHz DShot command rate
+  delayMicroseconds(500); // ~ 2 kHz DShot command rate
 }
