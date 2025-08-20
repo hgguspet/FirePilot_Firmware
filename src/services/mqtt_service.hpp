@@ -10,9 +10,19 @@ extern "C"
 #include <AsyncMqttClient.h>
 #include <functional>
 
+struct Message
+{
+    const char *topic;
+    const uint8_t *payload;
+    size_t len;
+    AsyncMqttClientMessageProperties props;
+};
+
 class MqttService
 {
 public:
+    using MessageCallback = std::function<void(const Message &msg)>;
+
     static MqttService &instance();
 
     // Initialize and start Wi-Fi + MQTT.
@@ -37,15 +47,12 @@ public:
     {
         const char *topic;
         uint8_t qos;
+        MessageCallback cb;
     };
-    bool subscribe(const char *topic, uint8_t qos = 0);
+    bool subscribe(const char *topic, uint8_t qos);
+    bool subscribe(const char *topic, uint8_t qos, MessageCallback cb);
     bool unsubscribe(const char *topic);
 
-    // App-level message callback (safe: payload not null-terminated)
-    using MessageCallback = std::function<void(const char *topic,
-                                               const uint8_t *payload,
-                                               size_t len,
-                                               const AsyncMqttClientMessageProperties &props)>;
     void onMessage(MessageCallback cb);
 
     // Lightweight state
@@ -67,10 +74,10 @@ private:
     void onMqttDisconnect(AsyncMqttClientDisconnectReason reason);
     void onMqttSubscribe(uint16_t packetId, uint8_t qos);
     void onMqttUnsubscribe(uint16_t packetId);
-    void onMqttMessage(char *topic, char *payload,
-                       AsyncMqttClientMessageProperties properties,
-                       size_t len, size_t index, size_t total);
+    void onMqttMessage(Message msg, size_t index, size_t total);
     void onMqttPublish(uint16_t packetId);
+
+    bool topicMatches(const std::string &filter, const char *topic);
 
     void resubscribeAll();
     std::vector<Sub> _subs;

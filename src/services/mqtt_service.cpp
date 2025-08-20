@@ -37,7 +37,7 @@ MqttService::MqttService()
     mqttClient_.onMessage([this](char *topic, char *payload,
                                  AsyncMqttClientMessageProperties props,
                                  size_t len, size_t index, size_t total)
-                          { this->onMqttMessage(topic, payload, props, len, index, total); });
+                          { this->onMqttMessage(Message{topic, reinterpret_cast<uint8_t *>(payload), len, props}, index, total); });
     mqttClient_.onPublish([this](uint16_t id)
                           { this->onMqttPublish(id); });
 }
@@ -124,10 +124,22 @@ bool MqttService::publish(const char *topic, const char *payload, size_t len,
 bool MqttService::subscribe(const char *topic, uint8_t qos)
 {
     // Keep a persistent copy for future resubscribe
-    _subs.push_back(Sub{topic, qos});
+    _subs.push_back(Sub{topic, qos, nullptr});
     if (!mqttClient_.connected())
     {
         LOGW("MqttService", "Queued sub '%s' not yet connected", topic);
+        return true; // Queued
+    }
+    uint16_t id = mqttClient_.subscribe(topic, qos);
+    return id != 0;
+}
+
+bool MqttService::subscribe(const char *topic, uint8_t qos, MessageCallback cb)
+{
+    _subs.push_back(Sub{topic, qos, std::move(cb)});
+    if (!mqttClient_.connected())
+    {
+        LOGW("MqttService", "Queued sub '%s' with message callback, not yet connected", topic);
         return true; // Queued
     }
     uint16_t id = mqttClient_.subscribe(topic, qos);
@@ -146,24 +158,25 @@ void MqttService::resubscribeAll()
 
 bool MqttService::unsubscribe(const char *topic)
 {
-    // Check persistent subscriptions
-    auto it = std::find_if(_subs.begin(), _subs.end(),
-                           [topic](const Sub &sub)
-                           { return strcmp(sub.topic, topic) == 0; });
+    auto it = std::find_if(
+        _subs.begin(), _subs.end(),
+        [topic](const Sub &s)
+        { return s.topic == topic; });
     if (it != _subs.end())
     {
+        std::string t = it->topic; // keep a copy for the broker call
         _subs.erase(it);
         if (mqttClient_.connected())
         {
-            uint16_t id = mqttClient_.unsubscribe(topic);
+            uint16_t id = mqttClient_.unsubscribe(t.c_str());
             return id != 0;
         }
-        return false; // Not connected
+        return false;
     }
     else
     {
-        LOGW("MqttService", "Attempted to unsubscribe from topic that was not subscribed to: %s", topic);
-        return false; // Not subscribed (warning / error)
+        LOGW("MqttService", "Attempted to unsubscribe from non-subscribed topic: %s", topic);
+        return false;
     }
 }
 
@@ -195,15 +208,15 @@ void MqttService::wifiTimerCbStatic(TimerHandle_t t)
 // ===== Event handlers =====
 void MqttService::handleWifiEvent(WiFiEvent_t event)
 {
-    LOGI("MqttService", "[WiFi-event] %d", event);
+    LOGI("MqttService", "WiFi-event %d", event);
     switch (event)
     {
     case SYSTEM_EVENT_STA_GOT_IP:
-        LOGI("MqttService", "[WiFi] Connected. IP: %s", WiFi.localIP().toString().c_str());
+        LOGI("MqttService", "WiFi Connected. IP: %s", WiFi.localIP().toString().c_str());
         connectMqtt();
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
-        LOGW("MqttService", "[WiFi] Disconnected.");
+        LOGW("MqttService", "WiFi Disconnected.");
         xTimerStop(mqttReconnectTimer_, 0); // don't race reconnects
         xTimerStart(wifiReconnectTimer_, 0);
         break;
@@ -214,13 +227,13 @@ void MqttService::handleWifiEvent(WiFiEvent_t event)
 
 void MqttService::onMqttConnect(bool sessionPresent)
 {
-    LOGI("MqttService", "[MQTT] Connected. sessionPresent=%d", sessionPresent);
+    LOGI("MqttService", "Connected. sessionPresent=%d", sessionPresent);
     resubscribeAll(); // Resubscribe to all topics
 }
 
 void MqttService::onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
-    LOGI("MqttService", "[MQTT] Disconnected. reason=%d", static_cast<int>(reason));
+    LOGI("MqttService", "Disconnected. reason=%d", static_cast<int>(reason));
     if (WiFi.isConnected())
     {
         xTimerStart(mqttReconnectTimer_, 0);
@@ -229,36 +242,105 @@ void MqttService::onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 
 void MqttService::onMqttSubscribe(uint16_t packetId, uint8_t qos)
 {
-    LOGI("MqttService", "[MQTT] Subscribed. id=%u qos=%u", packetId, qos);
+    LOGI("MqttService", "Subscribed. id=%u qos=%u", packetId, qos);
 }
 
 void MqttService::onMqttUnsubscribe(uint16_t packetId)
 {
-    LOGI("MqttService", "[MQTT] Unsubscribed. id=%u", packetId);
+    LOGI("MqttService", "Unsubscribed. id=%u", packetId);
 }
 
 void MqttService::onMqttPublish(uint16_t packetId)
 {
-    LOGI("MqttService", "[MQTT] Publish ACK. id=%u", packetId);
+    LOGI("MqttService", "Publish ACK. id=%u", packetId);
 }
 
-void MqttService::onMqttMessage(char *topic, char *payload,
-                                AsyncMqttClientMessageProperties properties,
-                                size_t len, size_t index, size_t total)
+static bool segEq(const char *a, size_t alen, const char *b, size_t blen)
 {
-    // payload may not be null-terminated; forward raw bytes
-    if (index == 0)
+    return alen == blen && memcmp(a, b, alen) == 0;
+}
+
+bool MqttService::topicMatches(const std::string &filter, const char *topic)
+{
+    // MQTT match per spec: filter tokens vs topic tokens
+    const char *f = filter.c_str();
+    const char *t = topic;
+
+    while (*f && *t)
     {
-        // first chunk
+        // read next token from filter
+        const char *fstart = f;
+        while (*f && *f != '/')
+            ++f;
+        size_t flen = size_t(f - fstart);
+
+        // read next token from topic
+        const char *tstart = t;
+        while (*t && *t != '/')
+            ++t;
+        size_t tlen = size_t(t - tstart);
+
+        if (flen == 1 && fstart[0] == '+')
+        {
+            // single-level wildcard: always matches this level
+        }
+        else if (flen == 1 && fstart[0] == '#')
+        {
+            // multi-level wildcard: must be last in filter
+            return true;
+        }
+        else if (!segEq(fstart, flen, tstart, tlen))
+        {
+            return false;
+        }
+
+        if (*f == '/')
+            ++f;
+        if (*t == '/')
+            ++t;
     }
-    if (appMsgCb_)
+
+    // If filter has trailing '#', it matches remaining topic
+    if (*f == '#' && (f == filter.c_str() || *(f - 1) == '/') && *(f + 1) == '\0')
     {
-        appMsgCb_(topic, reinterpret_cast<uint8_t *>(payload), len, properties);
+        return true;
     }
-    else
+
+    // Both must end at the same time (no leftover levels)
+    return *f == '\0' && *t == '\0';
+}
+
+void MqttService::onMqttMessage(Message msg, size_t index, size_t total)
+{
+    // If messages can be chunked and you need the full payload,
+    // you'd buffer by (topic,index,total) here. For now we forward chunks.
+
+    bool handled = false;
+    for (const auto &sub : _subs)
     {
-        LOGI("MqttService", "[MQTT] Message topic=%s len=%u qos=%u retain=%u idx=%u total=%u",
-             topic, (unsigned)len, properties.qos, properties.retain,
-             (unsigned)index, (unsigned)total);
+        if (topicMatches(sub.topic, msg.topic))
+        {
+            if (sub.cb)
+            {
+                sub.cb(msg);
+                handled = true;
+                // You can break on first match, or deliver to all matching filters.
+                // break;
+            }
+        }
+    }
+
+    if (!handled)
+    {
+        if (appMsgCb_)
+        {
+            appMsgCb_(msg);
+        }
+        else
+        {
+            LOGI("MqttService", "Message topic=%s len=%u qos=%u retain=%u idx=%u total=%u",
+                 msg.topic, (unsigned)msg.len, msg.props.qos, msg.props.retain,
+                 (unsigned)index, (unsigned)total);
+        }
     }
 }
