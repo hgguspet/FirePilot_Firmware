@@ -1,46 +1,41 @@
 #include "logging/logger.hpp"
 #include "logging/sinks/serial_sink.hpp"
 #include "logging/sinks/mqtt_sink.hpp"
-#include "logging/sinks/mqtt_sink.hpp"
 
 #include "services/mqtt_service.hpp"
 #include "services/telemetry_service.hpp"
 #include "telemetry/sensors/imu_mpu_9250.hpp"
 
 #include "drivers/esc/pwm.hpp"
-#include "drivers/esc/pwm.hpp"
+#include "drivers/dc/dc_motor_driver.hpp"
 
 #include "secrets.hpp"
-#include <cmath>
 #include <cmath>
 
 // ===== Config =================================================================
 static const char *DEVICE_ID = "Drone";
 static const char *LOG_TOPIC = "log";
 static const char *SERVO_TOPIC = "Drone/servo";
-static const char *SERVO_TOPIC = "Drone/servo";
+static const char *MOTOR_TOPIC = "Drone/motor";
 
 static constexpr uint32_t IMU_RATE = 100;         // Hz
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
 
 static const uint8_t SERVO_PIN = 32;
-
-static const uint8_t SERVO_PIN = 32;
+static const uint8_t MOTOR_PIN = 25;
 // ==============================================================================
 
 // ===== Hardware ===============================================================
 PwmDriver Servo;
-static float ServoTarget;
-
-// ===== Hardware ===============================================================
-PwmDriver Servo;
-static float ServoTarget;
+DcMotorDriver Motor;
+static volatile float ServoTarget;
+static volatile float MotorTarget = 0.0f;
 
 static IMU_MPU9250 imu(/*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
                        /*topicSuffix*/ "telemetry/imu");
 // ==============================================================================
 
-static void onServoUpdate(Message msg) static void onServoUpdate(Message msg)
+static void onServoUpdate(Message msg)
 {
   // Try reading value as float
   float target = atof((const char *)msg.payload);
@@ -57,10 +52,6 @@ static void onServoUpdate(Message msg) static void onServoUpdate(Message msg)
   ServoTarget = target;
   LOGI("Servo", "Received Invalid Target");
   return;
-}
-target = std::clamp(target, 0.f, 1.f);
-LOGI("Servo", "Received Target: %.2f", target);
-ServoTarget = target;
 }
 
 void setup()
@@ -116,47 +107,44 @@ void setup()
       /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
   imu.setI2CMutex(telem.i2cMutex());
   telem.addProvider(&imu);
-  // ===== Setup Telemetry Service ==============================================W
-  auto &telem = TelemetryService::instance();
-  telem.begin(
-      DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
-      /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
-  imu.setI2CMutex(telem.i2cMutex());
-  telem.addProvider(&imu);
 
   // ===== Esc & Servo Setup ====================================================
   Servo.setMinPulseUs(544);
   Servo.setMaxPulseUs(2400);
-  // Servo.setZeroThrottleValue(0.5f); // Centered servo
+  Servo.setZeroThrottleValue(0.5f); // Ensure non 0.0f start pos, as it would be outside steering limits
   ServoTarget = 0.5f;
   Servo.arm(true);
   if (!Servo.begin(SERVO_PIN, /*~50Hz is typical for servos*/ 50))
   {
-    // ===== Esc & Servo Setup ====================================================
-    Servo.setMinPulseUs(544);
-    Servo.setMaxPulseUs(2400);
-    // Servo.setZeroThrottleValue(0.5f); // Centered servo
-    ServoTarget = 0.5f;
-    Servo.arm(true);
-    if (!Servo.begin(SERVO_PIN, /*~50Hz is typical for servos*/ 50))
+    for (;;)
     {
-      for (;;)
+      LOGE("Servo", "Servo setup failed");
       {
         LOGE("Servo", "Servo setup failed");
-        {
-          LOGE("Servo", "Servo setup failed");
-          delay(1000);
-        }
+        delay(1000);
       }
     }
-    LOGI("Servo", "Servo ready on gpio pin: %u", SERVO_PIN);
-    LOGI("Servo", "Servo ready on gpio pin: %u", SERVO_PIN);
   }
+  LOGI("Servo", "Servo ready on gpio pin: %u", SERVO_PIN);
 
-  void loop()
+  Motor.arm(true);
+  if (!Motor.begin(MOTOR_PIN, /*~50Hz is more than enough, consistent with servo*/ 50))
   {
-    Servo.writeNormalized(ServoTarget);
-    delayMicroseconds(500); // Fine for most drivers
-    Servo.writeNormalized(ServoTarget);
-    delayMicroseconds(500); // Fine for most drivers
+    for (;;)
+    {
+      LOGE("Motor", "Motor setup failed");
+      {
+        LOGE("Motor", "Motor setup failed");
+        delay(1000);
+      }
+    }
   }
+  LOGI("Motor", "Motor ready on gpio pin: %u", MOTOR_PIN);
+}
+
+void loop()
+{
+  Servo.writeNormalized(ServoTarget);
+  Motor.writeNormalized(MotorTarget);
+  delayMicroseconds(500); // Works
+}
