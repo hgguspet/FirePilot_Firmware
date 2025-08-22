@@ -1,6 +1,6 @@
 #pragma once
 #include <driver/rmt.h>
-#include "../iesc_driver.hpp"
+#include "iesc_driver.hpp"
 #include <cmath>
 
 // Classic PWM for ESCs: 1000..2000 us pulse width, period chosen by FC (update rate)

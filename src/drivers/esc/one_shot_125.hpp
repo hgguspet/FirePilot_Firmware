@@ -1,6 +1,6 @@
 #pragma once
 #include <driver/rmt.h>
-#include "../iesc_driver.hpp"
+#include "iesc_driver.hpp"
 #include <cmath>
 
 // OneShot125: 125..250 us pulse width, period chosen by FC (update rate)

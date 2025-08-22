@@ -1,6 +1,6 @@
 #pragma once
 #include <driver/rmt.h>
-#include "../iesc_driver.hpp"
+#include "iesc_driver.hpp"
 
 class DShot600Driver final : public IEscDriver
 {

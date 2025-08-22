@@ -58,3 +58,7 @@ FirePilot uses a modular architecture that allows for easy extension and customi
 - **Service Layer** – Core flight control and telemetry services
 - **Communication Protocol** – JSON-based message format for interoperability
 
+## Todo
+
+- Safer driver arm commands
+- Driver batch writing

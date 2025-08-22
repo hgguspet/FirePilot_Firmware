@@ -8,6 +8,7 @@
 #include "telemetry/sensors/imu_mpu_9250.hpp"
 
 #include "drivers/esc/d_shot_600.hpp"
+#include "drivers/dc/dc_motor_driver.hpp"
 
 #include "secrets.hpp"
 
@@ -145,20 +146,17 @@ void setup()
   }
 
   // Subscribe to topics
-  mqtt.subscribe(ESC_TOPIC);
-  mqtt.onMessage([](const char *topic,
-                    const uint8_t *data,
-                    size_t len,
-                    const AsyncMqttClientMessageProperties &props)
+  mqtt.subscribe(ESC_TOPIC, 2);
+  mqtt.onMessage([](Message msg)
                  {
-    (void)props;
-    if (strcmp(topic, ESC_TOPIC) != 0) return;
-    String msg = payloadToString(data, len);
-    LOGI("MQTT <%s>: \"%s\"", topic, msg.c_str());
-    if (msg.equalsIgnoreCase("arm"))    { esc1.arm(true);  LOGI("ESC", "armed"); g_targetNorm = 0.0f; return; }
-    if (msg.equalsIgnoreCase("disarm")) { esc1.arm(false); LOGI("ESC", "disarmed"); g_targetNorm = 0.0f; return; }
+    (void)msg.props;
+    if (strcmp(msg.topic, ESC_TOPIC) != 0) return;
+    String msgStr = payloadToString(msg.payload, msg.len);
+    LOGI("MQTT <%s>: \"%s\"", msg.topic, msgStr.c_str());
+    if (msgStr.equalsIgnoreCase("arm"))    { esc1.arm(true);  LOGI("ESC", "armed"); g_targetNorm = 0.0f; return; }
+    if (msgStr.equalsIgnoreCase("disarm")) { esc1.arm(false); LOGI("ESC", "disarmed"); g_targetNorm = 0.0f; return; }
     float v;
-    if (tryParseNorm01(msg, v)) {
+    if (tryParseNorm01(msgStr, v)) {
       g_targetNorm = v;
       LOGI("ESC", "throttle=%.3f\n", (double)v);
     } else {
