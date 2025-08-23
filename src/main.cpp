@@ -18,18 +18,20 @@ static const char *LOG_TOPIC = "log";
 static const char *SERVO_TOPIC = "servo";
 static const char *MOTOR_TOPIC = "motor";
 
-static constexpr uint32_t IMU_RATE = 100;         // Hz
-static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
-
 static const uint8_t SERVO_PIN = 32;
 static const uint8_t MOTOR_PIN = 25;
+
+static constexpr uint32_t IMU_RATE = 100;         // Hz
+static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
 // ==============================================================================
 
 // ===== Hardware ===============================================================
 static DcMotorDriver Motor;
 static PwmDriver Servo;
+
 static volatile float MotorTarget = 0.0f;
 static volatile float ServoTarget = 0.5f;
+
 // static IMU_MPU9250 imu(
 //     /*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
 //     /*topicSuffix*/ "telemetry/imu");
@@ -41,7 +43,12 @@ static void onMotorUpdate(MqttService::Message msg)
 
   // Validation
   if (isnan(val) || val < -1.0f || val > 1.0f)
+    float val = atof(reinterpret_cast<const char *>(msg.payload));
+
+  // Validation
+  if (isnan(val) || val < -1.0f || val > 1.0f)
   {
+    LOGW("MOTOR", "Invalid motor value: %f", val);
     LOGW("MOTOR", "Invalid motor value: %f", val);
     return;
   }
@@ -97,7 +104,7 @@ void setup()
   // ===== Hardware interface initialization ====================================
   Wire.begin(); // Initialize I2C bus
 
-  // ===== Setup Telemetry Service ==============================================W
+  // ===== Setup Telemetry Service ==============================================
   // auto &telem = TelemetryService::instance();
   // telem.begin(
   //    DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
@@ -105,7 +112,7 @@ void setup()
   // imu.setI2CMutex(telem.i2cMutex());
   // telem.addProvider(&imu);
 
-  // ===== Setup Motor Driver ================================================
+  // ===== Setup Motor & Servo ===================================================
   Motor.arm(true);
   if (!Motor.begin(MOTOR_PIN, /*good enough */ 50))
   {
