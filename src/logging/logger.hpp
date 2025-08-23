@@ -58,7 +58,7 @@ public:
      *
      * @param level Minimum log level to output
      */
-    void setLevel(LogLevel level);
+    void setMinLevel(LogLevel level);
 
     /**
      * @brief Get the current minimum log level.

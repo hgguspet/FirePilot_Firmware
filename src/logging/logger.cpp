@@ -115,7 +115,7 @@ void Logger::init(uint16_t queue_capacity)
 #endif
 }
 
-void Logger::setLevel(LogLevel level)
+void Logger::setMinLevel(LogLevel level)
 {
     S.level = level;
 }

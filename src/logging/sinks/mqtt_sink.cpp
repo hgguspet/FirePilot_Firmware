@@ -99,23 +99,10 @@ size_t MqttSink::json_escape(char *out, size_t out_cap, const char *in, size_t i
 void MqttSink::write(const LogRecord &r)
 {
     // Fast-exit if broker isn’t up; we don’t block/retry here.
-    if (!svc_.mqttConnected())
+    if (!_svc.mqttConnected())
     {
-        dropped_++;
+        _dropped++;
         return;
-    }
-
-    // ---- Build topic: [<deviceId>]/log/[<LEVEL>] ----
-    char topic[128];
-    if (dev_ && dev_[0])
-    {
-        // "<deviceId>/log/<LEVEL>"
-        snprintf(topic, sizeof(topic), "%s/log/%s", dev_, level_str(r.level));
-    }
-    else
-    {
-        // "log/<LEVEL>"
-        snprintf(topic, sizeof(topic), "log/%s", level_str(r.level));
     }
 
     // ---- Build payload JSON ----
@@ -170,13 +157,13 @@ void MqttSink::write(const LogRecord &r)
                       (unsigned long)r.ts_us, level_str(r.level), esc_tag, esc_msg);
     if (jl < 0 || jl >= (int)sizeof(json))
     {
-        dropped_++; // message too large to encode
+        _dropped++; // message too large to encode
         return;
     }
 
     // Best-effort publish (non-blocking). If the client TX buffer is full, publish() returns false.
-    if (!svc_.publish(topic, json, (size_t)jl, qos_, retain_))
+    if (!_svc.publishRel((String("log/") + level_str(r.level)).c_str(), json, (size_t)jl, (MqttService::QoS)_qos, _retain))
     {
-        dropped_++;
+        _dropped++;
     }
 }
