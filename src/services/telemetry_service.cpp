@@ -19,11 +19,12 @@ TelemetryService &TelemetryService::instance()
     return inst;
 }
 
-void TelemetryService::begin(const char *droneId,
-                             size_t queueLen,
-                             UBaseType_t txPrio,
-                             uint32_t txStackWords,
-                             BaseType_t txCore)
+void TelemetryService::begin(
+    const char *droneId,
+    size_t queueLen,
+    UBaseType_t txPrio,
+    uint32_t txStackWords,
+    BaseType_t txCore)
 {
     _deviceId = droneId ? droneId : "Drone";
 
@@ -104,7 +105,7 @@ void TelemetryService::_txLoop()
 void TelemetryService::transmit(const char *topic, const TelemetrySample &s)
 {
     // (For now) Publish directly through MQTT
-    MqttService::instance().publish(
+    MqttService::MqttService::instance().publish(
         topic, reinterpret_cast<const char *>(s.payload), s.payload_length,
-        s.meta.qos, s.meta.retain);
+        (MqttService::QoS)s.meta.qos, s.meta.retain);
 }

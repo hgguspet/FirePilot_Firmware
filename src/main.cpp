@@ -15,8 +15,8 @@
 // ===== Config =================================================================
 static const char *DEVICE_ID = "Drone";
 static const char *LOG_TOPIC = "log";
-static const char *SERVO_TOPIC = "Drone/servo";
-static const char *MOTOR_TOPIC = "Drone/motor";
+static const char *SERVO_TOPIC = "servo";
+static const char *MOTOR_TOPIC = "motor";
 
 static constexpr uint32_t IMU_RATE = 100;         // Hz
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
@@ -26,32 +26,41 @@ static const uint8_t MOTOR_PIN = 25;
 // ==============================================================================
 
 // ===== Hardware ===============================================================
-PwmDriver Servo;
-DcMotorDriver Motor;
-static volatile float ServoTarget;
+static DcMotorDriver Motor;
+static PwmDriver Servo;
 static volatile float MotorTarget = 0.0f;
+static volatile float ServoTarget = 0.5f;
+// static IMU_MPU9250 imu(
+//     /*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
+//     /*topicSuffix*/ "telemetry/imu");
+//  ==============================================================================
 
-static IMU_MPU9250 imu(/*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
-                       /*topicSuffix*/ "telemetry/imu");
-// ==============================================================================
-
-static void onServoUpdate(Message msg)
+static void onMotorUpdate(MqttService::Message msg)
 {
-  // Try reading value as float
-  float target = atof((const char *)msg.payload);
-  if (isnan(target))
-    // Try reading value as float
-    float target = atof((const char *)msg.payload);
-  if (isnan(target))
+  float val = atof(reinterpret_cast<const char *>(msg.payload));
+
+  // Validation
+  if (isnan(val) || val < -1.0f || val > 1.0f)
   {
-    LOGI("Servo", "Received Invalid Target");
+    LOGW("MOTOR", "Invalid motor value: %f", val);
     return;
   }
-  target = std::clamp(target, 0.f, 1.f);
-  LOGI("Servo", "Received Target: %.2f", target);
-  ServoTarget = target;
-  LOGI("Servo", "Received Invalid Target");
-  return;
+  LOGI("MOTOR", "Motor target: %f", val);
+  MotorTarget = val;
+}
+
+static void onServoUpdate(MqttService::Message msg)
+{
+  float val = atof(reinterpret_cast<const char *>(msg.payload));
+
+  // Validation
+  if (isnan(val) || val < 0.0f || val > 1.0f)
+  {
+    LOGW("SERVO", "Invalid servo value: %f", val);
+    return;
+  }
+  LOGI("SERVO", "Servo target: %f", val);
+  ServoTarget = val;
 }
 
 void setup()
@@ -63,10 +72,10 @@ void setup()
     delay(10);
   }
 
-  auto &mqtt = MqttService::instance();
+  auto &mqtt = MqttService::MqttService::instance();
   auto &log = Logger::instance();
   log.init(256);
-  log.setLevel(LogLevel::Info);
+  log.setMinLevel(LogLevel::Info);
 
   static SerialSink serial_sink(&Serial);
   log.addSink(&serial_sink);
@@ -74,77 +83,56 @@ void setup()
   // Set MQTT server BEFORE Wi-Fi connect to avoid a first-connect miss
   mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
 
-  // Add MQTT sink (optional device id tag)
-  // Set MQTT server BEFORE Wi-Fi connect to avoid a first-connect miss
-  mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
-
-  // Add MQTT sink (optional device id tag)
-  static MqttSink mqtt_sink(mqtt, LOG_TOPIC, DEVICE_ID);
+  // Add MQTT sink
+  static MqttSink mqtt_sink(mqtt, LOG_TOPIC);
   log.addSink(&mqtt_sink);
 
   LOGI("BOOT", "Starting, ip=%s", WiFi.localIP().toString().c_str());
 
   // ===== Setup MQTT Client ====================================================
-  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password);
-
-  // Subscribe to ARM topic with per-topic callback
-  mqtt.subscribe(SERVO_TOPIC, /*QoS*/ 0, onServoUpdate);
-  LOGI("BOOT", "Starting, ip=%s", WiFi.localIP().toString().c_str());
-
-  // ===== Setup MQTT Client ====================================================
-  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password);
-
-  // Subscribe to ARM topic with per-topic callback
-  mqtt.subscribe(SERVO_TOPIC, /*QoS*/ 0, onServoUpdate);
+  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password, DEVICE_ID);
+  mqtt.subscribeRel(MOTOR_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onMotorUpdate);
+  mqtt.subscribeRel(SERVO_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onServoUpdate);
 
   // ===== Hardware interface initialization ====================================
   Wire.begin(); // Initialize I2C bus
 
   // ===== Setup Telemetry Service ==============================================W
-  auto &telem = TelemetryService::instance();
-  telem.begin(
-      DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
-      /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
-  imu.setI2CMutex(telem.i2cMutex());
-  telem.addProvider(&imu);
+  // auto &telem = TelemetryService::instance();
+  // telem.begin(
+  //    DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
+  //    /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+  // imu.setI2CMutex(telem.i2cMutex());
+  // telem.addProvider(&imu);
 
-  // ===== Esc & Servo Setup ====================================================
-  Servo.setMinPulseUs(544);
-  Servo.setMaxPulseUs(2400);
-  Servo.setZeroThrottleValue(0.5f); // Ensure non 0.0f start pos, as it would be outside steering limits
-  ServoTarget = 0.5f;
-  Servo.arm(true);
-  if (!Servo.begin(SERVO_PIN, /*~50Hz is typical for servos*/ 50))
-  {
-    for (;;)
-    {
-      LOGE("Servo", "Servo setup failed");
-      {
-        LOGE("Servo", "Servo setup failed");
-        delay(1000);
-      }
-    }
-  }
-  LOGI("Servo", "Servo ready on gpio pin: %u", SERVO_PIN);
-
+  // ===== Setup Motor Driver ================================================
   Motor.arm(true);
-  if (!Motor.begin(MOTOR_PIN, /*~50Hz is more than enough, consistent with servo*/ 50))
+  if (!Motor.begin(MOTOR_PIN, /*good enough */ 50))
   {
     for (;;)
     {
-      LOGE("Motor", "Motor setup failed");
-      {
-        LOGE("Motor", "Motor setup failed");
-        delay(1000);
-      }
+      LOGC("MOTOR", "Failed to initialize motor");
     }
   }
-  LOGI("Motor", "Motor ready on gpio pin: %u", MOTOR_PIN);
+  LOGI("MOTOR", "Motor driver initialized on pin %d", MOTOR_PIN);
+
+  Servo.setMinPulseUs(1000);
+  Servo.setMaxPulseUs(2000);
+  Servo.setZeroThrottleValue(0.5f); // Be careful if using this on other things!
+  Servo.arm(true);
+  if (!Servo.begin(SERVO_PIN, /*Typical servo frequency*/ 50))
+  {
+    for (;;)
+    {
+      LOGC("SERVO", "Failed to initialize servo");
+    }
+  }
+  LOGI("SERVO", "Servo driver initialized on pin %d", SERVO_PIN);
 }
 
 void loop()
 {
-  Servo.writeNormalized(ServoTarget);
   Motor.writeNormalized(MotorTarget);
-  delayMicroseconds(500); // Works
+  Servo.writeNormalized(ServoTarget);
+  delayMicroseconds(500); // ~2kHz
 }
