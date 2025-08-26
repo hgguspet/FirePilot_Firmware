@@ -5,8 +5,9 @@
 class MqttSink : public ILogSink
 {
 public:
-    // as by this projects mqtt topic convention, the topic equates to: <deviceId>/log/<severity>
-    // qos/retain: MQTT flags (keep qos=0, retain=false for logs)
+    // Publishes to "<channel>/<level?>" where:
+    //   channel = r.channel if set, otherwise baseTopic
+    //   level   = omitted if r.level == LogLevel::None
     MqttSink(
         MqttService::MqttService &svc,
         const char *baseTopic = "log",
@@ -15,8 +16,6 @@ public:
         : _svc(svc), _base(baseTopic), _qos(qos), _retain(retain) {}
 
     void write(const LogRecord &r) override;
-
-    // Optional counters for observability
     uint32_t droppedPublishes() const { return _dropped; }
 
 private:

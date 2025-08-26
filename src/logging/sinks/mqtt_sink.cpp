@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-static inline const char *safe_tag(const char *t) { return t ? t : ""; }
+static inline const char *safe_cstr(const char *s) { return s ? s : ""; }
 
 const char *MqttSink::level_str(LogLevel l)
 {
@@ -19,33 +19,24 @@ const char *MqttSink::level_str(LogLevel l)
         return "ERROR";
     case LogLevel::Critical:
         return "CRITICAL";
+    case LogLevel::None:
+        return ""; // used to omit level segment
     default:
         return "?";
     }
 }
 
-// Minimal JSON escaper (quotes, backslash, control chars). Returns bytes written.
-// Guarantees NUL termination if out_cap>0.
-size_t MqttSink::json_escape(char *out, size_t out_cap, const char *in, size_t in_len)
+size_t MqttSink::json_escape(char *out, size_t cap, const char *in, size_t len)
 {
-    if (out_cap == 0)
+    if (cap == 0)
         return 0;
     size_t o = 0;
     auto put = [&](char c)
-    {
-        if (o + 1 < out_cap)
-            out[o++] = c;
-    };
+    { if (o + 1 < cap) out[o++] = c; };
     auto put2 = [&](char a, char b)
-    {
-        if (o + 2 < out_cap)
-        {
-            out[o++] = a;
-            out[o++] = b;
-        }
-    };
+    { if (o + 2 < cap) { out[o++] = a; out[o++] = b; } };
 
-    for (size_t i = 0; i < in_len; ++i)
+    for (size_t i = 0; i < len; ++i)
     {
         unsigned char c = static_cast<unsigned char>(in[i]);
         switch (c)
@@ -74,9 +65,8 @@ size_t MqttSink::json_escape(char *out, size_t out_cap, const char *in, size_t i
         default:
             if (c < 0x20)
             {
-                // \u00XX (4 hex digits). Keep it minimal to save code size.
-                const char hex[] = "0123456789ABCDEF";
-                if (o + 6 < out_cap)
+                static const char hex[] = "0123456789ABCDEF";
+                if (o + 6 < cap)
                 {
                     out[o++] = '\\';
                     out[o++] = 'u';
@@ -98,18 +88,15 @@ size_t MqttSink::json_escape(char *out, size_t out_cap, const char *in, size_t i
 
 void MqttSink::write(const LogRecord &r)
 {
-    // Fast-exit if broker isn’t up; we don’t block/retry here.
     if (!_svc.mqttConnected())
     {
         _dropped++;
         return;
     }
 
-    // ---- Build payload JSON ----
-    // We prefer the preformatted message r.msg; if absent (unlikely with your logger),
-    // we fall back to formatting r.fmt/r.va into a small temp buffer first.
+    // ---- message text (prefer preformatted) ----
     char msgbuf[160];
-    const char *msg_ptr = nullptr;
+    const char *msg_ptr = "";
     size_t msg_len = 0;
 
     if (r.msg && r.msg_len)
@@ -125,44 +112,49 @@ void MqttSink::write(const LogRecord &r)
         va_end(copy);
         if (n > 0)
         {
-            msg_ptr = msgbuf;
-            msg_len = (n >= (int)sizeof(msgbuf)) ? (sizeof(msgbuf) - 1) : (size_t)n;
+            msg_len = (n >= (int)sizeof(msgbuf)) ? sizeof(msgbuf) - 1 : (size_t)n;
             msgbuf[msg_len] = '\0';
+            msg_ptr = msgbuf;
         }
-        else
-        {
-            msg_ptr = "";
-            msg_len = 0;
-        }
-    }
-    else
-    {
-        msg_ptr = "";
-        msg_len = 0;
     }
 
-    // Escape into a bounded buffer
+    // ---- payload JSON ----
     char esc_msg[192];
-    size_t esc_len = json_escape(esc_msg, sizeof(esc_msg), msg_ptr, msg_len);
+    (void)json_escape(esc_msg, sizeof(esc_msg), msg_ptr, msg_len);
 
-    const char *tag = safe_tag(r.tag);
     char esc_tag[64];
-    (void)json_escape(esc_tag, sizeof(esc_tag), tag, strnlen(tag, 63));
+    (void)json_escape(esc_tag, sizeof(esc_tag), safe_cstr(r.tag),
+                      strnlen(safe_cstr(r.tag), sizeof(esc_tag) - 1));
 
-    // t: timestamp in microseconds; keep it numeric for easy parsing
-    // Payload shape: {"t":12345678,"lvl":"WARN","tag":"DShot","msg":"..."}
     char json[256];
-    int jl = snprintf(json, sizeof(json),
-                      "{\"t\":%lu,\"lvl\":\"%s\",\"tag\":\"%s\",\"msg\":\"%s\"}",
-                      (unsigned long)r.ts_us, level_str(r.level), esc_tag, esc_msg);
+    int jl = snprintf(
+        json, sizeof(json),
+        "{\"t\":%lu,\"lvl\":\"%s\",\"tag\":\"%s\",\"msg\":\"%s\"}",
+        (unsigned long)r.ts_us, level_str(r.level), esc_tag, esc_msg);
     if (jl < 0 || jl >= (int)sizeof(json))
     {
-        _dropped++; // message too large to encode
+        _dropped++;
         return;
     }
 
-    // Best-effort publish (non-blocking). If the client TX buffer is full, publish() returns false.
-    if (!_svc.publishRel((String("log/") + level_str(r.level)).c_str(), json, (size_t)jl, (MqttService::QoS)_qos, _retain))
+    // ---- topic: <channel>/<level?> ----
+    const char *channel = (r.channel && r.channel[0]) ? r.channel : _base;
+    const char *lvl = level_str(r.level);
+
+    char topic[128];
+    if (r.level == LogLevel::None || !lvl[0])
+    {
+        // only channel
+        snprintf(topic, sizeof(topic), "%s", safe_cstr(channel));
+    }
+    else
+    {
+        // channel/LEVEL
+        snprintf(topic, sizeof(topic), "%s/%s", safe_cstr(channel), lvl);
+    }
+
+    // ---- publish (non-blocking) ----
+    if (!_svc.publishRel(topic, json, (size_t)jl, (MqttService::QoS)_qos, _retain))
     {
         _dropped++;
     }

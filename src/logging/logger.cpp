@@ -24,7 +24,7 @@ extern "C"
 #endif
 
 #ifndef LOG_TASK_STACK
-#define LOG_TASK_STACK 3072 // bytes
+#define LOG_TASK_STACK 4096 // bytes
 #endif
 
 #ifndef LOG_TASK_PRIO
@@ -245,9 +245,11 @@ void Logger::consumeTask()
         r.from_isr = qi.from_isr;
         r.msg = qi.len ? qi.msg : nullptr;
         r.msg_len = qi.len;
+        r.channel = "log";
 
         // snapshot sinks to minimize time in critical section
-        ILogSink *local[LOG_SINK_MAX];
+        ILogSink *
+            local[LOG_SINK_MAX];
         uint8_t cnt;
         portENTER_CRITICAL(&S.sinks_mux);
         cnt = S.sink_count;

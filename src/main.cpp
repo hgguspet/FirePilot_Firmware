@@ -1,4 +1,5 @@
 #include "logging/logger.hpp"
+#include "logging/pinger.hpp"
 #include "logging/sinks/serial_sink.hpp"
 #include "logging/sinks/mqtt_sink.hpp"
 
@@ -14,15 +15,14 @@
 
 // ===== Config =================================================================
 static const char *DEVICE_ID = "Drone";
-static const char *LOG_TOPIC = "log";
 static const char *SERVO_TOPIC = "servo";
 static const char *MOTOR_TOPIC = "motor";
 
 static const uint8_t SERVO_PIN = 32;
 static const uint8_t MOTOR_PIN = 25;
 
-static constexpr uint32_t IMU_RATE = 100;         // Hz
-static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
+static constexpr uint32_t IMU_RATE = 100; // Hz
+static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
 // ==============================================================================
 
 // ===== Hardware ===============================================================
@@ -81,22 +81,24 @@ void setup()
 
   auto &mqtt = MqttService::MqttService::instance();
   auto &log = Logger::instance();
+  auto &pinger = Pinger::instance(/*1Hz*/ 1000);
   log.init(256);
-  log.setMinLevel(LogLevel::Info);
+  log.setMinLevel(LogLevel::Debug);
 
   static SerialSink serial_sink(&Serial);
+  static MqttSink mqtt_sink(mqtt);
+
+  // Logging
   log.addSink(&serial_sink);
-
-  // Set MQTT server BEFORE Wi-Fi connect to avoid a first-connect miss
-  mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
-
-  // Add MQTT sink
-  static MqttSink mqtt_sink(mqtt, LOG_TOPIC);
   log.addSink(&mqtt_sink);
 
-  LOGI("BOOT", "Starting, ip=%s", WiFi.localIP().toString().c_str());
+  // pinger to prove active connection
+  pinger.addSink(&mqtt_sink);
+  pinger.begin();
 
   // ===== Setup MQTT Client ====================================================
+  mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
+  LOGI("BOOT", "Starting, ip=%s", WiFi.localIP().toString().c_str());
   mqtt.begin(secrets::wifi_ssid, secrets::wifi_password, DEVICE_ID);
   mqtt.subscribeRel(MOTOR_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onMotorUpdate);
   mqtt.subscribeRel(SERVO_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onServoUpdate);
