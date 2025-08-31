@@ -19,7 +19,8 @@ static const char *SERVO_TOPIC = "servo";
 static const char *MOTOR_TOPIC = "motor";
 
 static const uint8_t SERVO_PIN = 32;
-static const uint8_t MOTOR_PIN = 25;
+static const uint8_t MOTOR_IN_1 = 33;
+static const uint8_t MOTOR_IN_2 = 25;
 
 static constexpr uint32_t IMU_RATE = 100; // Hz
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
@@ -116,14 +117,15 @@ void setup()
 
   // ===== Setup Motor & Servo ===================================================
   Motor.arm(true);
-  if (!Motor.begin(MOTOR_PIN, /*good enough */ 50))
+  Motor.configureDualInputs(MOTOR_IN_1, MOTOR_IN_2, /*en*/ -1);
+  if (!Motor.begin(/*tied on L298N */ -1, /*good enough */ 50))
   {
     for (;;)
     {
       LOGC("MOTOR", "Failed to initialize motor");
     }
   }
-  LOGI("MOTOR", "Motor driver initialized on pin %d", MOTOR_PIN);
+  LOGI("MOTOR", "Motor driver initialized on pins %d, %d", MOTOR_IN_1, MOTOR_IN_2);
 
   Servo.setMinPulseUs(544);
   Servo.setMaxPulseUs(2400);
@@ -141,7 +143,16 @@ void setup()
 
 void loop()
 {
-  Motor.writeNormalized(MotorTarget);
+  if (MotorTarget == 0.0f) // feels like coasting should happen automatically
+                           // but since this works and FirePilot isn't really designed to drive dc motors especially without
+                           // pwm, this is fine for now
+  {
+    Motor.coast();
+  }
+  else
+  {
+    Motor.writeSigned(MotorTarget); // signed for direction control
+  }
   Servo.writeNormalized(ServoTarget);
   delayMicroseconds(500); // ~2kHz
 }

@@ -20,7 +20,7 @@ public:
     // 0..1 duty (unsigned). If a direction pin is configured, this is "forward".
     void writeNormalized(float duty01) override;
 
-    // Optional signed command in [-1..+1] (uses direction pin if present).
+    // Optional signed command in [-1..+1] (uses direction pin or IN1/IN2 if present).
     void writeSigned(float dutySigned) override;
 
     void setOutputLimits(float min01, float max01) override;
@@ -28,7 +28,7 @@ public:
     void arm(bool on) override;
     void setUpdateRate(uint32_t pwmFreqHz) override;
 
-    bool setBrake(bool on) override; // requires brake pin configured
+    bool setBrake(bool on) override; // supports brake pin OR dual-input active brake
     bool coast() override;           // high-Z/LOW output (depends on driver wiring)
 
     bool readTelemetry(Telemetry &out) override
@@ -39,10 +39,13 @@ public:
 
     // ---- Optional helpers (non-virtual) ----
     // Configure optional pins (call before begin()).
-    // dirPin: H-bridge direction (>=0 to enable signed control)
+    // dirPin: Single H-bridge direction (>=0 to enable signed control)
     // enPin:  optional enable pin for the power stage
     // brakePin: optional active-brake control (level true = brake)
     void configurePins(int dirPin = -1, int enPin = -1, int brakePin = -1);
+
+    // Configure dual-input H-bridge (e.g., L298N IN1/IN2; enPin is ENA/PWM enable).
+    void configureDualInputs(int in1Pin, int in2Pin, int enPin = -1);
 
     // Invert logical forward direction (useful if wiring is flipped).
     void setDirectionInverted(bool inv) { _dir_inverted = inv; }
@@ -51,9 +54,17 @@ public:
     void setResolutionBits(uint8_t bits) { _res_bits = bits; }
 
 private:
+    enum class DirMode : uint8_t
+    {
+        None,
+        SingleDir,
+        DualInputs
+    };
+
     void applyDutyRaw_(uint32_t duty);
     void ensureAttached_();
     void updateDirFromSigned_(float dutySigned);
+    void driveDualInputs_(bool in1, bool in2); // helper for L298N mode
 
 private:
     // LEDC allocation/state
@@ -65,10 +76,13 @@ private:
     bool _initalized = false;
     bool _armed = false;
 
-    // Optional GPIOs
-    int _pin_dir = -1;
-    int _pin_en = -1;
-    int _pin_brake = -1;
+    // Direction mode + GPIOs
+    DirMode _dir_mode = DirMode::None;
+    int _pin_dir = -1;   // Single DIR (original mode)
+    int _pin_in1 = -1;   // Dual-input mode
+    int _pin_in2 = -1;   // Dual-input mode
+    int _pin_en = -1;    // Optional overall enable
+    int _pin_brake = -1; // Optional dedicated brake (active HIGH)
     bool _dir_inverted = false;
 
     // Output limits
