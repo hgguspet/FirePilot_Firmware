@@ -24,6 +24,7 @@ static const float SERVO_LOW = 0.25f;
 static const float SERVO_HIGH = 0.75f;
 static const uint8_t MOTOR_IN_1 = 33;
 static const uint8_t MOTOR_IN_2 = 25;
+static const float MOTOR_DEADBAND = 0.3f; // below this value, motor is set to 0
 
 static constexpr uint32_t IMU_RATE = 100; // Hz (lower rates may cause problems)
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
@@ -58,6 +59,12 @@ static void onMotorUpdate(MqttService::Message msg)
     return;
   }
   LOGI("MOTOR", "Motor target: %f", val);
+
+  if (abs(val) < MOTOR_DEADBAND)
+  {
+    val = 0.0f; // deadband
+  }
+
   MotorTarget = val;
 }
 
