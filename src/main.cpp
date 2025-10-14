@@ -12,9 +12,10 @@
 
 #include "secrets.hpp"
 #include <cmath>
+#include <algorithm>
 
 // ===== Config =================================================================
-static const char *DEVICE_ID = "Drone";
+static const char *DEVICE_ID = "guspet24";
 static const char *SERVO_TOPIC = "servo";
 static const char *MOTOR_TOPIC = "motor";
 
@@ -22,7 +23,7 @@ static const uint8_t SERVO_PIN = 32;
 static const uint8_t MOTOR_IN_1 = 33;
 static const uint8_t MOTOR_IN_2 = 25;
 
-static constexpr uint32_t IMU_RATE = 100; // Hz
+static constexpr uint32_t IMU_RATE = 25; // Hz
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
 // ==============================================================================
 
@@ -33,23 +34,24 @@ static PwmDriver Servo;
 static volatile float MotorTarget = 0.0f;
 static volatile float ServoTarget = 0.5f;
 
-// static IMU_MPU9250 imu(
-//     /*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
-//     /*topicSuffix*/ "telemetry/imu");
+static IMU_MPU9250 imu(
+    /*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
+    /*topicSuffix*/ "telemetry/imu");
 //  ==============================================================================
 
 static void onMotorUpdate(MqttService::Message msg)
 {
-  float val = atof(reinterpret_cast<const char *>(msg.payload));
+  // copy the payload to a null-terminated buffer, to ensure mqtt can't mess with it
+  char buf[16];
+  strncpy(buf, reinterpret_cast<const char *>(msg.payload), std::min<size_t>(15, msg.len));
+  buf[std::min<size_t>(15, msg.len)] = '\0';
 
-  // Validation
-  if (isnan(val) || val < -1.0f || val > 1.0f)
-    float val = atof(reinterpret_cast<const char *>(msg.payload));
+  LOGI("MOTOR", "Received motor update: %s", buf);
+  float val = atof(buf);
 
   // Validation
   if (isnan(val) || val < -1.0f || val > 1.0f)
   {
-    LOGW("MOTOR", "Invalid motor value: %f", val);
     LOGW("MOTOR", "Invalid motor value: %f", val);
     return;
   }
@@ -59,7 +61,11 @@ static void onMotorUpdate(MqttService::Message msg)
 
 static void onServoUpdate(MqttService::Message msg)
 {
-  float val = atof(reinterpret_cast<const char *>(msg.payload));
+  char buf[16];
+  strncpy(buf, reinterpret_cast<const char *>(msg.payload), std::min<size_t>(15, msg.len));
+  buf[std::min<size_t>(15, msg.len)] = '\0';
+
+  float val = atof(buf);
 
   // Validation
   if (isnan(val) || val < 0.0f || val > 1.0f)
@@ -108,12 +114,12 @@ void setup()
   Wire.begin(); // Initialize I2C bus
 
   // ===== Setup Telemetry Service ==============================================
-  // auto &telem = TelemetryService::instance();
-  // telem.begin(
-  //    DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
-  //    /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
-  // imu.setI2CMutex(telem.i2cMutex());
-  // telem.addProvider(&imu);
+  auto &telem = TelemetryService::instance();
+  telem.begin(
+      DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
+      /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+  imu.setI2CMutex(telem.i2cMutex());
+  telem.addProvider(&imu);
 
   // ===== Setup Motor & Servo ===================================================
   Motor.arm(true);
