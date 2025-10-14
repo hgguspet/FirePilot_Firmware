@@ -20,6 +20,8 @@ static const char *SERVO_TOPIC = "servo";
 static const char *MOTOR_TOPIC = "motor";
 
 static const uint8_t SERVO_PIN = 32;
+static const float SERVO_LOW = 0.25f;
+static const float SERVO_HIGH = 0.75f;
 static const uint8_t MOTOR_IN_1 = 33;
 static const uint8_t MOTOR_IN_2 = 25;
 
@@ -74,6 +76,10 @@ static void onServoUpdate(MqttService::Message msg)
     return;
   }
   LOGI("SERVO", "Servo target: %f", val);
+
+  // Clamp to safe range
+  val = std::max(SERVO_LOW, std::min(SERVO_HIGH, val));
+
   ServoTarget = val;
 }
 
