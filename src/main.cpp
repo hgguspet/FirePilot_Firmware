@@ -23,7 +23,7 @@ static const uint8_t SERVO_PIN = 32;
 static const uint8_t MOTOR_IN_1 = 33;
 static const uint8_t MOTOR_IN_2 = 25;
 
-static constexpr uint32_t IMU_RATE = 25; // Hz
+static constexpr uint32_t IMU_RATE = 100; // Hz (lower rates may cause problems)
 static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
 // ==============================================================================
 
