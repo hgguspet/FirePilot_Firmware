@@ -6,6 +6,16 @@ void DcMotorDriver::configurePins(int dirPin, int enPin, int brakePin)
     _pin_dir = dirPin;
     _pin_en = enPin;
     _pin_brake = brakePin;
+
+    _dir_mode = (_pin_dir >= 0) ? DirMode::SingleDir : _dir_mode;
+}
+
+void DcMotorDriver::configureDualInputs(int in1Pin, int in2Pin, int enPin)
+{
+    _pin_in1 = in1Pin;
+    _pin_in2 = in2Pin;
+    _pin_en = enPin;
+    _dir_mode = (_pin_in1 >= 0 && _pin_in2 >= 0) ? DirMode::DualInputs : _dir_mode;
 }
 
 bool DcMotorDriver::begin(uint8_t pwmPin, uint32_t pwmFreqHz)
@@ -20,21 +30,34 @@ bool DcMotorDriver::begin(uint8_t pwmPin, uint32_t pwmFreqHz)
     _freq_hz = (pwmFreqHz == 0) ? 20000u : pwmFreqHz; // default 20 kHz
 
     // Configure optional pins
-    if (_pin_dir >= 0)
+    if (_dir_mode == DirMode::SingleDir && _pin_dir >= 0)
     {
         pinMode(_pin_dir, OUTPUT);
         digitalWrite(_pin_dir, _dir_inverted ? HIGH : LOW);
     }
+    if (_dir_mode == DirMode::DualInputs)
+    {
+        if (_pin_in1 >= 0)
+        {
+            pinMode(_pin_in1, OUTPUT);
+            digitalWrite(_pin_in1, LOW);
+        }
+        if (_pin_in2 >= 0)
+        {
+            pinMode(_pin_in2, OUTPUT);
+            digitalWrite(_pin_in2, LOW);
+        }
+    }
     if (_pin_en >= 0)
     {
         pinMode(_pin_en, OUTPUT);
-        digitalWrite(_pin_en, LOW);
-    } // disabled until arm()
+        digitalWrite(_pin_en, LOW); // disabled until arm()
+    }
     if (_pin_brake >= 0)
     {
         pinMode(_pin_brake, OUTPUT);
-        digitalWrite(_pin_brake, LOW);
-    } // brake off
+        digitalWrite(_pin_brake, LOW); // brake off
+    }
 
     // LEDC setup
     if (!ledcalloc::init())
@@ -66,18 +89,25 @@ void DcMotorDriver::end()
     ledc_channel_t ch = ch_.get();
     if (ch >= 0 && ch < LEDC_CHANNEL_MAX)
     {
-        // Drive output safe
         ledcWrite(ch, 0);
-        // Detach to release GPIO routing
         ledcDetachPin(_pin_pwm);
     }
     ch_.release();
 
-    // Optionally deassert pins
+    // Safe all pins
     if (_pin_en >= 0)
         digitalWrite(_pin_en, LOW);
     if (_pin_brake >= 0)
         digitalWrite(_pin_brake, LOW);
+    if (_dir_mode == DirMode::SingleDir && _pin_dir >= 0)
+        digitalWrite(_pin_dir, LOW);
+    if (_dir_mode == DirMode::DualInputs)
+    {
+        if (_pin_in1 >= 0)
+            digitalWrite(_pin_in1, LOW);
+        if (_pin_in2 >= 0)
+            digitalWrite(_pin_in2, LOW);
+    }
 
     _initalized = false;
     _armed = false;
@@ -89,17 +119,15 @@ void DcMotorDriver::end()
 DcCapabilities DcMotorDriver::caps() const
 {
     DcFeature f = 0;
-    if (_pin_dir >= 0)
+    if (_dir_mode == DirMode::SingleDir || _dir_mode == DirMode::DualInputs)
         f |= DcFeatures::DirectionPins;
-    if (_pin_brake >= 0)
-        f |= DcFeatures::BrakeCommand;
-    // We support changing frequency at runtime via ledcSetup
+    if (_pin_brake >= 0 || _dir_mode == DirMode::DualInputs)
+        f |= DcFeatures::BrakeCommand; // dual inputs can active-brake
     f |= DcFeatures::FreqAdjustable;
 
-    // Typical safe limits for LEDC @ ~20 kHz
     DcCapabilities c{};
     c.features = f;
-    c.maxFreqHz = DcPwmFreqHz(40000); // practical upper bound for many setups
+    c.maxFreqHz = DcPwmFreqHz(40000);
     c.maxResolutionBits = _res_bits;
     return c;
 }
@@ -120,14 +148,12 @@ void DcMotorDriver::arm(bool on)
     if (_pin_en >= 0)
         digitalWrite(_pin_en, on ? HIGH : LOW);
 
-    // When disarming, force duty=0
     if (!on)
     {
-        ledc_channel_t ch = ch_.get();
-        if (ch >= 0 && ch < LEDC_CHANNEL_MAX)
-        {
-            ledcWrite(ch, 0);
-        }
+        // Idle/safe outputs
+        if (_dir_mode == DirMode::DualInputs)
+            driveDualInputs_(false, false); // coast
+        applyDutyRaw_(0);
     }
 }
 
@@ -141,21 +167,15 @@ void DcMotorDriver::setUpdateRate(uint32_t pwmFreqHz)
     if (ch < 0 || ch >= LEDC_CHANNEL_MAX)
         return;
 
-    // Re-setup channel to new frequency with same resolution
     if (ledcSetup(ch, _freq_hz, _res_bits) == 0.0)
-    {
-        // failed: keep old freq
         return;
-    }
+
     _max_duty = (1u << _res_bits) - 1u;
-    // Keep current duty ratio by reading back (Arduino core lacks read; we could track last duty)
-    // For simplicity, leave duty as-is (hardware keeps it).
 }
 
 void DcMotorDriver::ensureAttached_()
 {
-    // Arduino core ledcAttachPin is idempotent for the same mapping; guard anyway.
-    // (No-op here; kept for parity with other backends.)
+    // kept for parity with other backends (no-op)
 }
 
 void DcMotorDriver::applyDutyRaw_(uint32_t duty)
@@ -166,7 +186,6 @@ void DcMotorDriver::applyDutyRaw_(uint32_t duty)
     if (ch < 0 || ch >= LEDC_CHANNEL_MAX)
         return;
 
-    // Clamp and write
     if (duty > _max_duty)
         duty = _max_duty;
     ledcWrite(ch, duty);
@@ -204,13 +223,46 @@ void DcMotorDriver::writeNormalized(float duty01)
     applyDutyRaw_(duty);
 }
 
+void DcMotorDriver::driveDualInputs_(bool in1, bool in2)
+{
+    if (_dir_mode != DirMode::DualInputs)
+        return;
+    if (_pin_in1 >= 0)
+        digitalWrite(_pin_in1, in1 ? HIGH : LOW);
+    if (_pin_in2 >= 0)
+        digitalWrite(_pin_in2, in2 ? HIGH : LOW);
+}
+
 void DcMotorDriver::updateDirFromSigned_(float dutySigned)
 {
-    if (_pin_dir < 0)
-        return;
-    bool forward = (dutySigned >= 0.0f);
-    bool level = _dir_inverted ? !forward : forward;
-    digitalWrite(_pin_dir, level ? HIGH : LOW);
+    switch (_dir_mode)
+    {
+    case DirMode::SingleDir:
+    {
+        if (_pin_dir < 0)
+            return;
+        bool forward = (dutySigned >= 0.0f);
+        bool level = _dir_inverted ? !forward : forward;
+        digitalWrite(_pin_dir, level ? HIGH : LOW);
+        break;
+    }
+    case DirMode::DualInputs:
+    {
+        // For dual inputs, encode direction via IN1/IN2
+        bool forward = (dutySigned >= 0.0f);
+        if (_dir_inverted)
+            forward = !forward;
+        if (forward)
+            driveDualInputs_(true, false); // IN1=H, IN2=L
+        else
+            driveDualInputs_(false, true); // IN1=L, IN2=H
+        break;
+    }
+    case DirMode::None:
+    default:
+        // nothing to do
+        break;
+    }
 }
 
 void DcMotorDriver::writeSigned(float dutySigned)
@@ -218,44 +270,65 @@ void DcMotorDriver::writeSigned(float dutySigned)
     if (!_initalized)
         return;
 
-    // Map sign to direction (if present), magnitude to duty
     float mag = std::fabs(dutySigned);
     if (mag > 1.0f)
         mag = 1.0f;
 
-    if (_pin_dir >= 0)
+    if (_dir_mode == DirMode::SingleDir || _dir_mode == DirMode::DualInputs)
     {
         updateDirFromSigned_(dutySigned);
         writeNormalized(mag);
     }
     else
     {
-        // No direction pin -> behave like unsigned driver
+        // No direction pins -> behave like unsigned driver
         writeNormalized(mag);
     }
 }
 
 bool DcMotorDriver::setBrake(bool on)
 {
-    if (_pin_brake < 0)
-        return false;
-    digitalWrite(_pin_brake, on ? HIGH : LOW);
-    if (on)
-        applyDutyRaw_(0);
-    return true;
+    // Prefer dedicated brake pin if present
+    if (_pin_brake >= 0)
+    {
+        digitalWrite(_pin_brake, on ? HIGH : LOW);
+        if (on)
+            applyDutyRaw_(0);
+        return true;
+    }
+
+    // Dual input bridges can do active brake (IN1=IN2=HIGH)
+    if (_dir_mode == DirMode::DualInputs)
+    {
+        if (on)
+        {
+            driveDualInputs_(true, true); // fast brake
+            applyDutyRaw_(0);
+        }
+        else
+        {
+            // Release brake -> default to coast until next command
+            driveDualInputs_(false, false);
+        }
+        return true;
+    }
+
+    // Single-dir only cannot actively brake without extra hardware
+    return false;
 }
 
 bool DcMotorDriver::coast()
 {
-    // For a low-side MOSFET stage, "coast" is typically just duty=0
-    // without asserting brake. If an EN pin exists, disable it.
     if (!_initalized)
         return false;
 
     if (_pin_en >= 0)
-    {
         digitalWrite(_pin_en, LOW);
-    }
     applyDutyRaw_(0);
+
+    // Dual input freewheel: IN1=IN2=LOW
+    if (_dir_mode == DirMode::DualInputs)
+        driveDualInputs_(false, false);
+
     return true;
 }

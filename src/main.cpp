@@ -1,108 +1,93 @@
 #include "logging/logger.hpp"
-#include "logging/sinks/mqtt_sink.hpp"
+#include "logging/pinger.hpp"
 #include "logging/sinks/serial_sink.hpp"
+#include "logging/sinks/mqtt_sink.hpp"
 
 #include "services/mqtt_service.hpp"
 #include "services/telemetry_service.hpp"
-
 #include "telemetry/sensors/imu_mpu_9250.hpp"
 
-#include "drivers/esc/d_shot_600.hpp"
+#include "drivers/esc/pwm.hpp"
 #include "drivers/dc/dc_motor_driver.hpp"
 
 #include "secrets.hpp"
-
-#include <Arduino.h>
-
-// Priority hierarchy for drone:
-// 25: Hardware interrupts/critical safety
-// 20: Flight controller main loop
-// 18: IMU sampling
-// 15: Motor control PWM updates
-// 10: Navigation/GPS
-// 5:  Telemetry/logging
-// 1:  Housekeeping tasks
+#include <cmath>
+#include <algorithm>
 
 // ===== Config =================================================================
-static const char *DEVICE_ID = "Drone";
-static const char *LOG_TOPIC = "log";
-static const char *ESC_TOPIC = "Drone/manual/esc";
-static const int ESC_PIN = 25;
-static const int ESC_RATE = 2000;
+static const char *DEVICE_ID = "guspet24";
+static const char *SERVO_TOPIC = "servo";
+static const char *MOTOR_TOPIC = "motor";
 
-static constexpr uint32_t IMU_RATE = 100;         // Hz
-static constexpr size_t TELEMETRY_QUEUE_LEN = 64; // Telemetry queue depth
+static const uint8_t SERVO_PIN = 32;
+static const float SERVO_LOW = 0.25f;
+static const float SERVO_HIGH = 0.75f;
+static const uint8_t MOTOR_IN_1 = 33;
+static const uint8_t MOTOR_IN_2 = 25;
+static const float MOTOR_DEADBAND = 0.3f; // below this value, motor is set to 0
+
+static constexpr uint32_t IMU_RATE = 100; // Hz (lower rates may cause problems)
+static constexpr size_t TELEMETRY_QUEUE_LEN = 64;
 // ==============================================================================
 
-// ===== Accessed Hardware ======================================================
-static IMU_MPU9250 imu(/*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
-                       /*topicSuffix*/ "telemetry/imu");
+// ===== Hardware ===============================================================
+static DcMotorDriver Motor;
+static PwmDriver Servo;
 
-static DShot600Driver esc1;
+static volatile float MotorTarget = 0.0f;
+static volatile float ServoTarget = 0.5f;
 
-// ==============================================================================
+static IMU_MPU9250 imu(
+    /*i2cMutex*/ nullptr, /*rateHz*/ IMU_RATE,
+    /*topicSuffix*/ "telemetry/imu");
+//  ==============================================================================
 
-static volatile float g_targetNorm = 0.0f;
-
-static String payloadToString(const uint8_t *data, size_t len)
+static void onMotorUpdate(MqttService::Message msg)
 {
-  String s;
-  s.reserve(len + 1); // +1 for null terminator
-  for (size_t i = 0; i < len; ++i)
+  // copy the payload to a null-terminated buffer, to ensure mqtt can't mess with it
+  char buf[16];
+  strncpy(buf, reinterpret_cast<const char *>(msg.payload), std::min<size_t>(15, msg.len));
+  buf[std::min<size_t>(15, msg.len)] = '\0';
+
+  LOGI("MOTOR", "Received motor update: %s", buf);
+  float val = atof(buf);
+
+  // Validation
+  if (isnan(val) || val < -1.0f || val > 1.0f)
   {
-    s += static_cast<char>(data[i]);
+    LOGW("MOTOR", "Invalid motor value: %f", val);
+    return;
   }
-  s.trim();
-  return s;
+  LOGI("MOTOR", "Motor target: %f", val);
+
+  if (abs(val) < MOTOR_DEADBAND)
+  {
+    val = 0.0f; // deadband
+  }
+
+  MotorTarget = val;
 }
 
-static bool tryParseNorm01(const String &in, float &out)
+static void onServoUpdate(MqttService::Message msg)
 {
-  String s = in; // copy
-  s.trim();
-  s.replace(',', '.');
-  int first = -1, last = -1;
-  for (int i = 0; i < (int)s.length(); ++i)
+  char buf[16];
+  strncpy(buf, reinterpret_cast<const char *>(msg.payload), std::min<size_t>(15, msg.len));
+  buf[std::min<size_t>(15, msg.len)] = '\0';
+
+  float val = atof(buf);
+
+  // Validation
+  if (isnan(val) || val < 0.0f || val > 1.0f)
   {
-    char c = s[i];
-    if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+')
-    {
-      first = i;
-      break;
-    }
+    LOGW("SERVO", "Invalid servo value: %f", val);
+    return;
   }
-  if (first >= 0)
-  {
-    last = first;
-    while (last < (int)s.length())
-    {
-      char c = s[last];
-      if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+')
-      {
-        ++last;
-      }
-      else
-      {
-        break;
-      }
-    }
-    String num = s.substring(first, last);
-    float v = num.toFloat();
-    if (!isnan(v))
-    {
-      if (v < 0.f)
-      {
-        v = 0.f;
-      }
-      if (v > 1.f)
-      {
-        v = 1.f;
-      }
-      out = v;
-      return true;
-    }
-  }
-  return false;
+  LOGI("SERVO", "Servo target: %f", val);
+
+  // Clamp to safe range
+  val = std::max(SERVO_LOW, std::min(SERVO_HIGH, val));
+
+  ServoTarget = val;
 }
 
 void setup()
@@ -114,86 +99,79 @@ void setup()
     delay(10);
   }
 
-  // Bring up Wi-Fi + MQTT
-  auto &mqtt = MqttService::instance();
-
+  auto &mqtt = MqttService::MqttService::instance();
   auto &log = Logger::instance();
+  auto &pinger = Pinger::instance(/*1Hz*/ 1000);
   log.init(256);
-  log.setLevel(LogLevel::Info);
+  log.setMinLevel(LogLevel::Debug);
 
   static SerialSink serial_sink(&Serial);
-  log.addSink(&serial_sink);
+  static MqttSink mqtt_sink(mqtt);
 
-  // Add MQTT sink (device id is optional; helps when multiple FCs publish)
-  static MqttSink mqtt_sink(mqtt, LOG_TOPIC, DEVICE_ID);
+  // Logging
+  log.addSink(&serial_sink);
   log.addSink(&mqtt_sink);
 
-  LOGI("BOOT", "MQTT sink ready, ip=%s", WiFi.localIP().toString().c_str());
+  // pinger to prove active connection
+  pinger.addSink(&mqtt_sink);
+  pinger.begin();
+
+  // ===== Setup MQTT Client ====================================================
+  mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
+  LOGI("BOOT", "Starting, ip=%s", WiFi.localIP().toString().c_str());
+  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password, DEVICE_ID);
+  mqtt.subscribeRel(MOTOR_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onMotorUpdate);
+  mqtt.subscribeRel(SERVO_TOPIC, /*QoS*/ MqttService::QoS::ExactlyOnce, onServoUpdate);
 
   // ===== Hardware interface initialization ====================================
   Wire.begin(); // Initialize I2C bus
 
-  // ===== Setup MQTT Client ====================================================
-  mqtt.begin(secrets::wifi_ssid, secrets::wifi_password);
-  if (secrets::mqtt_broker && secrets::mqtt_port)
-  {
-    mqtt.setServer(secrets::mqtt_broker, secrets::mqtt_port);
-  }
-  else
-  {
-    // use default
-    mqtt.setServer(IPAddress(192, 168, 1, 200), 1883);
-  }
-
-  // Subscribe to topics
-  mqtt.subscribe(ESC_TOPIC, 2);
-  mqtt.onMessage([](Message msg)
-                 {
-    (void)msg.props;
-    if (strcmp(msg.topic, ESC_TOPIC) != 0) return;
-    String msgStr = payloadToString(msg.payload, msg.len);
-    LOGI("MQTT <%s>: \"%s\"", msg.topic, msgStr.c_str());
-    if (msgStr.equalsIgnoreCase("arm"))    { esc1.arm(true);  LOGI("ESC", "armed"); g_targetNorm = 0.0f; return; }
-    if (msgStr.equalsIgnoreCase("disarm")) { esc1.arm(false); LOGI("ESC", "disarmed"); g_targetNorm = 0.0f; return; }
-    float v;
-    if (tryParseNorm01(msgStr, v)) {
-      g_targetNorm = v;
-      LOGI("ESC", "throttle=%.3f\n", (double)v);
-    } else {
-      LOGD("ESC", "ignored payload");
-    } });
-
   // ===== Setup Telemetry Service ==============================================
-  auto &svc = TelemetryService::instance();
-  svc.begin(DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
-            /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+  auto &telem = TelemetryService::instance();
+  telem.begin(
+      DEVICE_ID, /*queueLen=*/TELEMETRY_QUEUE_LEN,
+      /*txPrio=*/5, /*txStackWords=*/4096, /*txCore=*/tskNO_AFFINITY);
+  imu.setI2CMutex(telem.i2cMutex());
+  telem.addProvider(&imu);
 
-  // Hand shared I2C mutex to providers that use it
-  imu.setI2CMutex(svc.i2cMutex());
-
-  // Register IMU provider
-  svc.addProvider(&imu);
-
-  // ===== Esc Setup ==============================================================
-  if (!esc1.begin(ESC_PIN, ESC_RATE))
+  // ===== Setup Motor & Servo ===================================================
+  Motor.arm(true);
+  Motor.configureDualInputs(MOTOR_IN_1, MOTOR_IN_2, /*en*/ -1);
+  if (!Motor.begin(/*tied on L298N */ -1, /*good enough */ 50))
   {
-    LOGC("ESC", "init failed");
     for (;;)
-      delay(1000);
+    {
+      LOGC("MOTOR", "Failed to initialize motor");
+    }
   }
-  esc1.arm(true);
-  uint32_t t0 = millis();
-  while (millis() - t0 < 2000)
+  LOGI("MOTOR", "Motor driver initialized on pins %d, %d", MOTOR_IN_1, MOTOR_IN_2);
+
+  Servo.setMinPulseUs(544);
+  Servo.setMaxPulseUs(2400);
+  Servo.setZeroThrottleValue(0.5f); // Be careful if using this on other things!
+  Servo.arm(true);
+  if (!Servo.begin(SERVO_PIN, /*Typical servo frequency*/ 50))
   {
-    esc1.writeNormalized(0.0f);
-    yield();
+    for (;;)
+    {
+      LOGC("SERVO", "Failed to initialize servo");
+    }
   }
-  LOGI("ESC", "ready on GPIO %d @ %d Hz. MQTT topic: %s\n", ESC_PIN, ESC_RATE, ESC_TOPIC);
+  LOGI("SERVO", "Servo driver initialized on pin %d", SERVO_PIN);
 }
 
 void loop()
 {
-  float target = g_targetNorm;
-  esc1.writeNormalized(target);
-  delayMicroseconds(500); // ~ 2 kHz DShot command rate
+  if (MotorTarget == 0.0f) // feels like coasting should happen automatically
+                           // but since this works and FirePilot isn't really designed to drive dc motors especially without
+                           // pwm, this is fine for now
+  {
+    Motor.coast();
+  }
+  else
+  {
+    Motor.writeSigned(MotorTarget); // signed for direction control
+  }
+  Servo.writeNormalized(ServoTarget);
+  delayMicroseconds(500); // ~2kHz
 }

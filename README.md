@@ -62,3 +62,4 @@ FirePilot uses a modular architecture that allows for easy extension and customi
 
 - Safer driver arm commands
 - Driver batch writing
+- Change ping service to be called heartbeat
